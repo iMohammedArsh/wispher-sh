@@ -1,0 +1,18 @@
+/* Shared readability pass for the existing secondary panels. */
+.app-content .glass-panel .text-xs { font-size: .875rem !important; }
+.app-content .glass-panel .text-\[11px\] { font-size: .75rem !important; }
+.app-content .glass-panel input,
+.app-content .glass-panel select,
+.app-content .glass-panel textarea { min-height: 2.75rem; font-size: .9375rem !important; }
+.app-content .glass-panel button { min-height: 2.5rem; }
+.app-content .glass-panel h3 { font-size: 1.125rem !important; }
+.app-content .glass-panel h4 { font-size: .875rem !important; }
+.app-content .glass-panel [class*="text-slate-400"],
+.app-content .glass-panel [class*="text-slate-500"] { color: #59615a !important; }
+.app-content .glass-panel [class*="text-slate-300"] { color: #353d36 !important; }
+.app-content .glass-panel [class*="text-purple"],
+.app-content .glass-panel [class*="text-indigo"] { color: #24543f !important; }
+@media (max-width: 720px) {
+  .app-content .glass-panel .text-xs { font-size: 1rem !important; }
+  .app-content .glass-panel .text-\[11px\] { font-size: .8125rem !important; }
+}
