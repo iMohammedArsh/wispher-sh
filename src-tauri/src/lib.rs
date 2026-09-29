@@ -50,6 +50,14 @@ fn default_transcription_language() -> String {
     "auto".into()
 }
 
+fn default_hotkey_combo() -> String {
+    if cfg!(target_os = "macos") {
+        "Cmd+Shift+Space".into()
+    } else {
+        "Ctrl+Shift+Space".into()
+    }
+}
+
 fn bundled_whisper_paths() -> (std::path::PathBuf, std::path::PathBuf) {
     let project_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -68,11 +76,35 @@ fn bundled_whisper_paths() -> (std::path::PathBuf, std::path::PathBuf) {
             },
         );
     }
-    #[cfg(not(target_os = "windows"))]
-    (
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(executable) = std::env::current_exe() {
+            if let Some(contents) = executable.parent().and_then(std::path::Path::parent) {
+                let resources = contents.join("Resources").join("whisper");
+                let binary = resources.join("whisper-cli");
+                let model = resources.join("ggml-small.bin");
+                if binary.is_file() && model.is_file() {
+                    return (binary, model);
+                }
+            }
+        }
+        let root = project_root.join("tools").join("whisper.cpp");
+        return (
+            root.join("macos").join("whisper-cli"),
+            root.join("models").join("ggml-small.bin"),
+        );
+    }
+    #[cfg(target_os = "linux")]
+    return (
         std::path::PathBuf::from("/home/administrator/whisper.cpp/main"),
         std::path::PathBuf::from("/home/administrator/whisper.cpp/models/ggml-base.en.bin"),
-    )
+    );
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    return (
+        std::path::PathBuf::from("whisper-cli"),
+        std::path::PathBuf::from("ggml-small.bin"),
+    );
 }
 
 impl Default for AppSettings {
@@ -85,7 +117,7 @@ impl Default for AppSettings {
             whisper_model_path: whisper_model_path.to_string_lossy().into_owned(),
             whisper_binary_path: whisper_binary_path.to_string_lossy().into_owned(),
             audio_gain_factor: 4.0,
-            hotkey_combo: "Ctrl+Shift+Space".into(),
+            hotkey_combo: default_hotkey_combo(),
             transcription_language: default_transcription_language(),
             delivery_mode: default_delivery_mode(),
             app_usage_tracking: false,
@@ -126,7 +158,13 @@ impl AppSettings {
         // Alt+Space is reserved for the Windows system menu. Keep existing installations
         // aligned with the non-conflicting system-wide shortcut.
         if settings.hotkey_combo == "Alt+Space" || settings.hotkey_combo == "Ctrl+Alt+Space" {
-            settings.hotkey_combo = "Ctrl+Shift+Space".into();
+            settings.hotkey_combo = default_hotkey_combo();
+            let _ = settings.save();
+        }
+
+        #[cfg(target_os = "macos")]
+        if settings.hotkey_combo == "Ctrl+Shift+Space" {
+            settings.hotkey_combo = default_hotkey_combo();
             let _ = settings.save();
         }
 
@@ -332,7 +370,7 @@ pub mod commands {
         set_delivery_message(
             &app,
             &state,
-            format!("Could not {action} the Wisper window: {details}"),
+            format!("Could not {action} the Hams window: {details}"),
         );
     }
 
@@ -467,7 +505,7 @@ fn start_recording_internal(
     drop(status);
 
     let overlay = state.overlay.clone();
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     let app_for_level = app.clone();
     let recorder = Arc::clone(&state.recorder);
     std::thread::spawn(move || {
@@ -477,7 +515,7 @@ fn start_recording_internal(
             // The native Windows overlay is a Tauri webview and uses this event.
             // WSL uses the separate WPF overlay state file, so sending 16 events/sec
             // through the main WebKit renderer would only create needless repaint load.
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             let _ = app_for_level.emit("audio-level", level);
             std::thread::sleep(std::time::Duration::from_millis(60));
         }

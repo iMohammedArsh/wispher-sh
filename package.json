@@ -1,5 +1,5 @@
 {
-  "name": "tauri-app",
+  "name": "hams",
   "private": true,
   "version": "0.0.1",
   "type": "module",
@@ -7,7 +7,9 @@
     "dev": "vite --host 127.0.0.1 --port 1430 --strictPort",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "export PATH=\"$HOME/.cargo/bin:$PATH\" 2>/dev/null; export CARGO_TARGET_DIR=$HOME/wisper-target; export LIBGL_ALWAYS_SOFTWARE=1; export GALLIUM_DRIVER=llvmpipe; export WEBKIT_DISABLE_COMPOSITING_MODE=1; export WEBKIT_DISABLE_DMABUF_RENDERER=1; export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1; export GDK_BACKEND=x11; export PULSE_SERVER=unix:/mnt/wslg/runtime-dir/pulse/native; export XCURSOR_THEME=Adwaita; export XCURSOR_SIZE=24; pactl set-default-source RDPSource 2>/dev/null || true; tauri"
+    "tauri": "PATH=/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:$PATH tauri",
+    "tauri:dev": "PATH=/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:$PATH tauri dev",
+    "tauri:build": "PATH=/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:$PATH tauri build"
   },
   "dependencies": {
     "@fontsource/dm-sans": "^5.3.0",

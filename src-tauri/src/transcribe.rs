@@ -220,7 +220,7 @@ impl WhisperTranscriber {
             .unwrap_or_default()
             .as_nanos();
         let temp_wav_path = std::env::temp_dir().join(format!(
-            "wisper-dictation-{}-{suffix}.wav",
+            "hams-dictation-{}-{suffix}.wav",
             std::process::id()
         ));
         fs::write(&temp_wav_path, wav_bytes)

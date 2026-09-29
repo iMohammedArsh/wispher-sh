@@ -1,5 +1,6 @@
 import React from "react";
 import { Keyboard, Mic } from "lucide-react";
+import { platformName } from "../platform";
 
 interface DictationStudioProps {
   onToggleDictation: () => void;
@@ -23,7 +24,7 @@ export const DictationStudio: React.FC<DictationStudioProps> = ({
             Stay in the moment.
           </h1>
         </div>
-        <span className="mode-chip">Local &amp; private</span>
+        <span className="mode-chip">Local transcription</span>
       </div>
       <div
         className={`record-surface quiet-record-surface ${isRecording ? "recording" : ""}`}
@@ -39,7 +40,7 @@ export const DictationStudio: React.FC<DictationStudioProps> = ({
         <p>
           {isRecording
             ? "Use the overlay controls to finish or discard."
-            : "Use Wisper from any selected input on Windows."}
+            : `Use Hams from any selected input on ${platformName}.`}
         </p>
         <span className="key-hint">
           <Keyboard /> {hotkey}

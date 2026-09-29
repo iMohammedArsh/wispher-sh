@@ -1,0 +1,30 @@
+{
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Hams",
+        "width": 900,
+        "height": 650,
+        "minWidth": 760,
+        "minHeight": 560,
+        "resizable": true,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "visible": true,
+        "backgroundColor": "#f3f1ec",
+        "center": true,
+        "focus": true
+      }
+    ]
+  },
+  "bundle": {
+    "targets": ["app", "dmg"],
+    "resources": {
+      "../tools/whisper.cpp/macos/whisper-cli": "whisper/whisper-cli",
+      "../tools/whisper.cpp/macos/whisper-server": "whisper/whisper-server",
+      "../tools/whisper.cpp/models/ggml-small.bin": "whisper/ggml-small.bin"
+    }
+  }
+}

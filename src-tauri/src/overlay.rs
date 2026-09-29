@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tauri::AppHandle;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use tauri::{
     window::Color, LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder,
 };
@@ -120,7 +120,7 @@ impl OverlayController {
             return;
         }
         let result = WebviewWindowBuilder::new(app, "island", WebviewUrl::App("index.html".into()))
-            .title("Wisper voice status")
+            .title("Hams voice status")
             .inner_size(40.0, 8.0)
             .resizable(false)
             .decorations(false)
@@ -151,6 +151,39 @@ impl OverlayController {
         }
     }
 
+    /// Creates a small non-focusable island below the macOS menu bar. It stays out of the Dock
+    /// and follows Hams while the main window is hidden.
+    #[cfg(target_os = "macos")]
+    pub fn initialize<F>(&self, app: &AppHandle, _on_toggle: F)
+    where
+        F: Fn() + Send + 'static,
+    {
+        if app.get_webview_window("island").is_some() {
+            return;
+        }
+        let result = WebviewWindowBuilder::new(app, "island", WebviewUrl::App("index.html".into()))
+            .title("Hams voice status")
+            .inner_size(40.0, 8.0)
+            .resizable(false)
+            .decorations(false)
+            .transparent(true)
+            .background_color(Color(0, 0, 0, 0))
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .focused(false)
+            .visible(false)
+            .build();
+        match result {
+            Ok(window) => {
+                let _ = window.set_shadow(false);
+                if let Ok(Some(monitor)) = window.primary_monitor() {
+                    position_macos_window(&window, &monitor, 40, 8);
+                }
+            }
+            Err(error) => eprintln!("[Overlay] Could not create the macOS island: {error}"),
+        }
+    }
+
     #[cfg(target_os = "linux")]
     pub fn initialize<F>(&self, app: &AppHandle, on_toggle: F)
     where
@@ -174,7 +207,7 @@ impl OverlayController {
         }
     }
 
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     pub fn initialize<F>(&self, _app: &tauri::AppHandle, _on_toggle: F)
     where
         F: Fn() + Send + 'static,
@@ -195,19 +228,21 @@ impl OverlayController {
         }
         #[cfg(target_os = "windows")]
         resize_native_window(app, state);
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(target_os = "macos")]
+        resize_macos_window(app, state);
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
         let _ = (app, state);
     }
 
     /// Reveal the native overlay only after the renderer has applied its overlay-only style.
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub fn reveal_when_ready(&self, app: &AppHandle) {
         if let Some(window) = app.get_webview_window("island") {
             let _ = window.show();
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     pub fn reveal_when_ready(&self, _app: &AppHandle) {}
 
     pub fn set_level(&self, rms_amplitude: f32) {
@@ -233,6 +268,37 @@ impl OverlayController {
             eprintln!("[Overlay] Could not update overlay state: {error}");
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn resize_macos_window(app: &AppHandle, state: &str) {
+    let (width, height) = match state {
+        "recording" | "processing" => (118, 32),
+        "error" => (280, 52),
+        _ => (40, 8),
+    };
+    if let Some(window) = app.get_webview_window("island") {
+        let _ = window.set_size(LogicalSize::new(width as f64, height as f64));
+        if let Ok(Some(monitor)) = window.primary_monitor() {
+            position_macos_window(&window, &monitor, width, height);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn position_macos_window(
+    window: &tauri::WebviewWindow,
+    monitor: &tauri::Monitor,
+    width: u32,
+    _height: u32,
+) {
+    let work_area = monitor.work_area();
+    let scale_factor = monitor.scale_factor();
+    let physical_width = (width as f64 * scale_factor).round() as i32;
+    let _ = window.set_position(PhysicalPosition::new(
+        work_area.position.x + (work_area.size.width as i32 - physical_width) / 2,
+        work_area.position.y + (10.0 * scale_factor).round() as i32,
+    ));
 }
 
 #[cfg(target_os = "windows")]

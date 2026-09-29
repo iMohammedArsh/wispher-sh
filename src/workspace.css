@@ -227,10 +227,17 @@
   height: 25px;
 }
 .workspace-name > .brand-soundmark {
+  display: flex;
+  width: 23px;
+  min-width: 23px;
+  align-items: center;
   margin: 0;
   color: inherit;
   font-size: inherit;
   font-weight: inherit;
+}
+.window-titlebar.is-macos {
+  padding-left: 84px;
 }
 .brand-soundmark i {
   display: block;

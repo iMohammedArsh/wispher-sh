@@ -1,6 +1,5 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import "@fontsource/dm-sans/400.css";
 import "@fontsource/dm-sans/500.css";
 import "@fontsource/dm-sans/600.css";
@@ -13,10 +12,11 @@ import "./refinement.css";
 import "./accessibility.css";
 import "./titlebar.css";
 import "./workspace.css";
+import { currentWindowLabel } from "./tauri";
 
 // This runs before React mounts. It prevents the island from ever painting with
 // the main application's light page styling while the React tree is starting.
-if (getCurrentWindow().label === "island") {
+if (currentWindowLabel() === "island") {
   document.body.classList.add("overlay-window");
 }
 

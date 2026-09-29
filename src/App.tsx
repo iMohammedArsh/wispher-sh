@@ -1,7 +1,6 @@
 import { useState, useEffect, useLayoutEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Check, Info, Keyboard, Minus, Square, X } from "lucide-react";
 import {
   AppSettings,
@@ -20,6 +19,8 @@ import { InsightsPanel } from "./components/InsightsPanel";
 import { VocabularyManager } from "./components/VocabularyManager";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { AccessibilityGuide } from "./components/AccessibilityGuide";
+import { defaultHotkey, holdHotkeyLabel, isMacOS } from "./platform";
+import { currentWindow, currentWindowLabel } from "./tauri";
 
 function DynamicIsland() {
   const [status, setStatus] = useState<AppStatus>({
@@ -70,7 +71,7 @@ function DynamicIsland() {
       <main className="overlay-root">
         <section
           className="overlay-pill is-idle"
-          aria-label="Wisper ready for dictation"
+          aria-label="Hams ready for dictation"
         />
       </main>
     );
@@ -89,7 +90,7 @@ function DynamicIsland() {
             ? "Recording dictation"
             : busy
               ? "Processing dictation"
-              : "Wisper error"
+              : "Hams error"
         }
       >
         {recording && (
@@ -167,7 +168,7 @@ function DynamicIsland() {
 }
 
 function WindowTitleBar({ title }: { title: string }) {
-  const window = getCurrentWindow();
+  const window = currentWindow();
   const runWindowAction = (action: string, operation: () => Promise<void>) => {
     operation().catch((error) => {
       invoke("report_window_action_failure", {
@@ -177,19 +178,19 @@ function WindowTitleBar({ title }: { title: string }) {
     });
   };
   return (
-    <header className="window-titlebar">
+    <header className={`window-titlebar ${isMacOS ? "is-macos" : ""}`}>
       <div className="titlebar-drag" data-tauri-drag-region>
-        <div className="wordmark">wisper</div>
+        <div className="wordmark">hams</div>
         <span>{title}</span>
       </div>
-      <div className="window-actions">
+      {!isMacOS && <div className="window-actions">
         <button
           type="button"
           aria-label="Minimize window"
           title="Minimize"
           onPointerDown={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
-          onClick={() => runWindowAction("minimize", () => window.minimize())}
+          onClick={() => window && runWindowAction("minimize", () => window.minimize())}
         >
           <Minus />
         </button>
@@ -200,9 +201,8 @@ function WindowTitleBar({ title }: { title: string }) {
           onPointerDown={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
           onClick={() =>
-            runWindowAction("maximize or restore", () =>
-              window.toggleMaximize(),
-            )
+            window &&
+            runWindowAction("maximize or restore", () => window.toggleMaximize())
           }
         >
           <Square />
@@ -214,17 +214,17 @@ function WindowTitleBar({ title }: { title: string }) {
           title="Close"
           onPointerDown={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
-          onClick={() => runWindowAction("close", () => window.close())}
+          onClick={() => window && runWindowAction("close", () => window.close())}
         >
           <X />
         </button>
-      </div>
+      </div>}
     </header>
   );
 }
 
 export default function App() {
-  if (getCurrentWindow().label === "island") return <DynamicIsland />;
+  if (currentWindowLabel() === "island") return <DynamicIsland />;
   const [settings, setSettings] = useState<AppSettings>({
     gemini_api_key: "",
     gemini_model: "gemini-2.5-flash",
@@ -233,7 +233,7 @@ export default function App() {
     whisper_model_path: "ggml-small.bin",
     whisper_binary_path: "whisper.cpp",
     audio_gain_factor: 2.5,
-    hotkey_combo: "Ctrl+Shift+Space",
+    hotkey_combo: defaultHotkey,
     transcription_language: "auto",
     delivery_mode: "copy_and_paste",
     app_usage_tracking: false,
@@ -385,7 +385,7 @@ export default function App() {
                 <p>VOICE WORKSPACE</p>
                 <h1>Write without breaking your flow.</h1>
                 <span>
-                  Dictate locally, then Wisper safely delivers the words to the
+                  Dictate locally, then Hams safely delivers the words to the
                   input you selected.
                 </span>
               </header>
@@ -421,7 +421,7 @@ export default function App() {
                     <div>
                       <h2>Overlay-led dictation</h2>
                       <p>
-                        Press <kbd>Ctrl + Shift + Space</kbd>. Recording,
+                        Press <kbd>{holdHotkeyLabel}</kbd>. Recording,
                         processing, and delivery stay in the compact overlay.
                       </p>
                     </div>

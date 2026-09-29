@@ -60,7 +60,7 @@ pub struct GeminiFormatter {
 
 fn smart_dictation_instruction() -> String {
     String::from(
-        "You are Wisper's smart dictation formatter. Convert the supplied raw voice transcript into clean, paste-ready writing while preserving the speaker's exact meaning and language. \
+        "You are Hams' smart dictation formatter. Convert the supplied raw voice transcript into clean, paste-ready writing while preserving the speaker's exact meaning and language. \
         Preserve Malayalam script, English, and mixed Malayalam-English dictation; do not translate. \
         Correct only obvious grammar, capitalization, punctuation, spacing, and paragraph breaks. \
         If two or more clearly distinct enumerated items are dictated (for example 'first', 'second', 'third'), render an ordered list. \

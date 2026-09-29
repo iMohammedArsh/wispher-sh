@@ -1791,6 +1791,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "hams"
+version = "0.0.1"
+dependencies = [
+ "arboard",
+ "base64 0.22.1",
+ "cpal",
+ "dirs 5.0.1",
+ "enigo",
+ "hound",
+ "indexmap 1.9.3",
+ "rdev",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-opener",
+ "tokio",
+ "windows-sys 0.59.0",
+ "x11",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4372,29 +4395,6 @@ dependencies = [
  "webview2-com",
  "window-vibrancy",
  "windows 0.61.3",
-]
-
-[[package]]
-name = "tauri-app"
-version = "0.0.1"
-dependencies = [
- "arboard",
- "base64 0.22.1",
- "cpal",
- "dirs 5.0.1",
- "enigo",
- "hound",
- "indexmap 1.9.3",
- "rdev",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-opener",
- "tokio",
- "windows-sys 0.59.0",
- "x11",
 ]
 
 [[package]]

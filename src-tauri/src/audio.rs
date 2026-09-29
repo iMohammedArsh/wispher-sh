@@ -54,7 +54,7 @@ pub struct RecordedAudio {
     pub diagnostics: AudioDiagnostics,
 }
 
-/// Captures the default WSLg/PulseAudio microphone and converts it to Whisper's 16 kHz mono WAV.
+/// Captures the platform's default microphone and converts it to Whisper's 16 kHz mono WAV.
 pub struct AudioRecorder {
     recording: Arc<AtomicBool>,
     audio_data: Arc<Mutex<Vec<f32>>>,
@@ -81,10 +81,9 @@ impl AudioRecorder {
 
         let host = cpal::default_host();
         let device = host.default_input_device().ok_or_else(|| {
-            self.set_failure(
-                "No microphone is exposed to WSL. Check Windows microphone privacy and WSLg.",
-            );
-            "No default input device (microphone) found.".to_string()
+            let message = microphone_help("No default input device was found");
+            self.set_failure(&message);
+            message
         })?;
         let device_name = device
             .name()
@@ -157,8 +156,7 @@ impl AudioRecorder {
             diagnostics.message = Some("No audio frames arrived from the microphone.".into());
             *self.diagnostics.lock().unwrap() = diagnostics.clone();
             return Err(
-                "No audio captured. Speak into the selected Windows microphone and try again."
-                    .into(),
+                microphone_help("No audio was captured"),
             );
         }
         if diagnostics.recorded_duration_secs < MIN_RECORDING_SECONDS {
@@ -173,8 +171,7 @@ impl AudioRecorder {
             diagnostics.message = Some("The microphone captured near-silence.".into());
             *self.diagnostics.lock().unwrap() = diagnostics.clone();
             return Err(
-                "No voice was detected. Check the Windows input device and its microphone level."
-                    .into(),
+                microphone_help("No voice was detected"),
             );
         }
 
@@ -190,7 +187,7 @@ impl AudioRecorder {
         let applied_gain = enhance_headset_voice(&mut whisper_samples, gain_factor);
         if diagnostics.is_clipping {
             diagnostics.message = Some(
-                "Input clipped. Lower the Windows microphone level for clearer transcription."
+                "Input clipped. Lower the microphone input level for clearer transcription."
                     .into(),
             );
         } else if raw_rms < 0.01 && applied_gain > 1.0 {
@@ -220,6 +217,16 @@ impl AudioRecorder {
         let mut diagnostics = self.diagnostics.lock().unwrap();
         diagnostics.is_recording = false;
         diagnostics.message = Some(message.to_string());
+    }
+}
+
+fn microphone_help(problem: &str) -> String {
+    if cfg!(target_os = "macos") {
+        format!(
+            "{problem}. Check System Settings → Privacy & Security → Microphone and allow Hams."
+        )
+    } else {
+        format!("{problem}. Check the selected input device and its microphone level.")
     }
 }
 

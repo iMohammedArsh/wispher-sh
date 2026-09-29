@@ -161,13 +161,13 @@ export function InsightsPanel({
           <h4 className="font-bold text-slate-100">Your voice</h4>
           {summary?.profile_unlocked ? (
             <p className="mt-2 text-sm text-slate-500">
-              Your local profile is ready. Wisper can now surface recurring
+              Your local profile is ready. Hams can now surface recurring
               vocabulary and correction patterns as you approve them.
             </p>
           ) : (
             <>
               <p className="mt-2 text-sm text-slate-500">
-                Wisper waits for enough real data before drawing any conclusion
+                Hams waits for enough real data before drawing any conclusion
                 about your writing habits.
               </p>
               <div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-800">
@@ -191,7 +191,7 @@ export function InsightsPanel({
         <div className="flex items-start justify-between gap-3">
           <div>
             <h4 className="font-bold text-slate-100">
-              Teach Wisper a correction
+              Teach Hams a correction
             </h4>
             <p className="mt-1 text-xs text-slate-500">
               Only an explicit rule is reused in future dictations. Example:

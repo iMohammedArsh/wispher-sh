@@ -66,7 +66,7 @@ export const Header: React.FC<HeaderProps> = ({
             <i />
           </span>
           <div>
-            wisper
+            hams
             <span>Private voice workspace</span>
           </div>
         </div>

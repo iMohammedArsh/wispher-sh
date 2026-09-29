@@ -11,6 +11,7 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { AppStatus } from "../types";
+import { holdHotkeyLabel } from "../platform";
 
 interface TranscriptCardProps {
   status: AppStatus;
@@ -141,7 +142,7 @@ export const TranscriptCard: React.FC<TranscriptCardProps> = ({
             <p>
               No dictation recorded in this session yet.
               <br />
-              Hold <strong>Ctrl + Shift + Space</strong> anywhere on Windows to speak.
+              Hold <strong>{holdHotkeyLabel}</strong> anywhere to speak.
             </p>
           </div>
         )}

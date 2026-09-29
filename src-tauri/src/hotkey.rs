@@ -14,6 +14,10 @@ use std::sync::{
     mpsc::{self, Sender},
     Mutex, OnceLock,
 };
+#[cfg(target_os = "macos")]
+use std::sync::atomic::AtomicBool;
+#[cfg(target_os = "macos")]
+use rdev::{listen, Event, EventType, Key};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::{
     Foundation::{GetLastError, LPARAM, LRESULT, WPARAM},
@@ -57,13 +61,98 @@ impl HotkeyListener {
                 return;
             }
 
-            #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+            #[cfg(target_os = "macos")]
+            {
+                if let Err(message) = listen_natively_on_macos(start, stop) {
+                    error(message);
+                }
+                return;
+            }
+
+            #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
             error(
-                "Background shortcuts are supported through the Windows host helper in this build."
+                "Background shortcuts are not supported on this platform."
                     .into(),
             );
         });
     }
+}
+
+#[cfg(target_os = "macos")]
+fn listen_natively_on_macos<FStart, FStop>(
+    on_start: Arc<FStart>,
+    on_stop: Arc<FStop>,
+) -> Result<(), String>
+where
+    FStart: Fn(bool) + Send + Sync + 'static,
+    FStop: Fn() + Send + Sync + 'static,
+{
+    let command_down = Arc::new(AtomicBool::new(false));
+    let shift_down = Arc::new(AtomicBool::new(false));
+    let option_down = Arc::new(AtomicBool::new(false));
+    let space_down = Arc::new(AtomicBool::new(false));
+    let toggle_latched = Arc::new(AtomicBool::new(false));
+    let mode = Arc::new(AtomicU8::new(0)); // 0 idle, 1 push-to-talk, 2 hands-free
+
+    println!(
+        "[Hotkey] macOS shortcuts ready: hold Cmd+Shift+Space; toggle Cmd+Shift+Option."
+    );
+    listen(move |event: Event| {
+        let (key, is_press, is_release) = match event.event_type {
+            EventType::KeyPress(key) => (key, true, false),
+            EventType::KeyRelease(key) => (key, false, true),
+            _ => return,
+        };
+
+        match key {
+            Key::MetaLeft | Key::MetaRight => command_down.store(is_press, Ordering::SeqCst),
+            Key::ShiftLeft | Key::ShiftRight => shift_down.store(is_press, Ordering::SeqCst),
+            Key::Alt | Key::AltGr => option_down.store(is_press, Ordering::SeqCst),
+            Key::Space => {
+                if is_press
+                    && command_down.load(Ordering::SeqCst)
+                    && shift_down.load(Ordering::SeqCst)
+                    && !option_down.load(Ordering::SeqCst)
+                    && !space_down.swap(true, Ordering::SeqCst)
+                    && mode
+                        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_ok()
+                {
+                    on_start(false);
+                } else if is_release && space_down.swap(false, Ordering::SeqCst) {
+                    if mode
+                        .compare_exchange(1, 0, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_ok()
+                    {
+                        on_stop();
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        let toggle_chord = command_down.load(Ordering::SeqCst)
+            && shift_down.load(Ordering::SeqCst)
+            && option_down.load(Ordering::SeqCst);
+        if toggle_chord && !toggle_latched.swap(true, Ordering::SeqCst) {
+            match mode.load(Ordering::SeqCst) {
+                0 if mode
+                    .compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok() => on_start(true),
+                2 if mode
+                    .compare_exchange(2, 0, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok() => on_stop(),
+                _ => {}
+            }
+        } else if !toggle_chord && is_release {
+            toggle_latched.store(false, Ordering::SeqCst);
+        }
+    })
+    .map_err(|error| {
+        format!(
+            "macOS could not start global shortcuts: {error:?}. Allow Hams in System Settings → Privacy & Security → Input Monitoring, then restart Hams."
+        )
+    })
 }
 
 #[cfg(target_os = "windows")]

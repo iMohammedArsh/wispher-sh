@@ -11,7 +11,7 @@ export const AccessibilityGuide: React.FC = () => {
           OS Accessibility & Keystroke Injection Guide
         </h3>
         <p className="text-xs text-slate-400">
-          Wisper requires low-level system permissions to detect background hotkeys and inject text into target apps.
+          Hams needs microphone access to record and accessibility permissions to detect shortcuts and paste into other apps.
         </p>
       </div>
 
@@ -27,7 +27,7 @@ export const AccessibilityGuide: React.FC = () => {
             <li className="flex items-start gap-2.5">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
               <span>
-                <strong className="text-slate-200">Global Hotkeys:</strong> Low-level keyboard hook (<code className="text-purple-300 font-mono">rdev</code>) works automatically across all apps.
+                <strong className="text-slate-200">Global Hotkeys:</strong> The native Windows keyboard hook works automatically across supported apps.
               </span>
             </li>
             <li className="flex items-start gap-2.5">
@@ -39,7 +39,7 @@ export const AccessibilityGuide: React.FC = () => {
             <li className="flex items-start gap-2.5">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
               <span>
-                <strong className="text-slate-200">Elevated Apps:</strong> To dictate into Administrator/Elevated applications (e.g. Admin Command Prompt or Windows Terminal), launch Wisper as Administrator.
+                <strong className="text-slate-200">Elevated Apps:</strong> To dictate into Administrator/Elevated applications (e.g. Admin Command Prompt or Windows Terminal), launch Hams as Administrator.
               </span>
             </li>
           </ul>
@@ -57,10 +57,13 @@ export const AccessibilityGuide: React.FC = () => {
               Open <strong className="text-slate-200">System Settings → Privacy & Security</strong>.
             </li>
             <li>
-              Navigate to <strong className="text-slate-200">Accessibility</strong> and grant permission to <strong className="text-slate-200">Wisper Assistant</strong> so it can simulate <code className="text-purple-300 font-mono">Cmd+V</code> keystrokes.
+              Under <strong className="text-slate-200">Accessibility</strong>, allow <strong className="text-slate-200">Hams</strong> so it can simulate <code className="text-purple-300 font-mono">⌘V</code> in the selected app.
             </li>
             <li>
               Navigate to <strong className="text-slate-200">Input Monitoring</strong> and toggle ON for background hotkey detection.
+            </li>
+            <li>
+              Under <strong className="text-slate-200">Microphone</strong>, allow Hams to capture audio while you dictate.
             </li>
           </ol>
         </div>

@@ -61,7 +61,7 @@ pub struct DeliveryResult {
 
 /// Delivers a successful dictation through the system clipboard.
 ///
-/// The operating system decides whether Ctrl+V inserts at the caret or replaces an existing
+/// The operating system decides whether the standard paste shortcut inserts at the caret or replaces an existing
 /// editable selection. Wisper deliberately does not inspect selected application content.
 pub struct ClipboardInjector;
 
@@ -97,7 +97,7 @@ impl ClipboardInjector {
             copied: true,
             paste_attempted: false,
             pasted: false,
-            message: "Copied to clipboard. Paste it anywhere with Ctrl+V.".into(),
+            message: format!("Copied to clipboard. Paste it anywhere with {}.", paste_shortcut()),
         })
     }
 
@@ -125,7 +125,7 @@ impl ClipboardInjector {
                 copied: true,
                 paste_attempted: false,
                 pasted: false,
-                message: "Copied to clipboard. Paste it anywhere with Ctrl+V.".into(),
+                message: format!("Copied to clipboard. Paste it anywhere with {}.", paste_shortcut()),
             });
         }
 
@@ -164,6 +164,14 @@ impl ClipboardInjector {
             pasted: true,
             message: "Copied to clipboard and sent paste to the focused app. An editable selection is replaced by normal paste behavior.".into(),
         })
+    }
+}
+
+fn paste_shortcut() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "⌘V"
+    } else {
+        "Ctrl+V"
     }
 }
 
@@ -208,7 +216,11 @@ fn paste_into_target_app(_target: Option<&ForegroundTarget>) -> Result<(), Strin
         .map_err(|error| format!("Could not press the paste modifier key: {error}"))?;
     let paste_result = enigo.key(Key::Unicode('v'), Direction::Click);
     let release_result = enigo.key(modifier, Direction::Release);
-    paste_result.map_err(|error| format!("Could not send the paste shortcut: {error}"))?;
+    paste_result.map_err(|error| {
+        format!(
+            "Could not send the paste shortcut: {error}. On macOS, allow Hams in System Settings → Privacy & Security → Accessibility."
+        )
+    })?;
     release_result.map_err(|error| format!("Could not release the paste modifier key: {error}"))?;
     Ok(())
 }

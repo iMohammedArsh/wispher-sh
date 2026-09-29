@@ -11,6 +11,7 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { AppSettings } from "../types";
+import { holdHotkeyLabel, pasteShortcutLabel, toggleHotkeyLabel } from "../platform";
 
 interface SettingsPanelProps {
   settings: AppSettings;
@@ -82,7 +83,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
               </button>
             </div>
             <p className="text-[11px] text-slate-500">
-              Turns a completed transcript into clear paragraphs, lists, and questions while protecting your custom vocabulary. Audio stays local.
+              Sends transcript text—not audio—to Gemini for optional formatting. Local transcription remains available without a key.
             </p>
           </div>
 
@@ -165,7 +166,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
               <option value="paste_and_restore">Paste & Restore Clipboard History</option>
             </select>
             <p className="text-[11px] text-slate-500">
-              Automatically pastes text into active application (VS Code, Browser, Slack, Word) using synthetic keystrokes.
+              Automatically pastes text into the active application using the standard {pasteShortcutLabel} shortcut.
             </p>
           </div>
 
@@ -178,11 +179,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 text-xs font-mono space-y-1 text-slate-300">
               <div className="flex justify-between">
                 <span>Hold to talk:</span>
-                <span className="text-purple-300 font-bold">Ctrl + Shift + Space</span>
+                <span className="text-purple-300 font-bold">{holdHotkeyLabel}</span>
               </div>
               <div className="flex justify-between">
                 <span>Hands-free toggle:</span>
-                <span className="text-indigo-300 font-bold">Ctrl + Shift + Alt</span>
+                <span className="text-indigo-300 font-bold">{toggleHotkeyLabel}</span>
               </div>
             </div>
           </div>
@@ -197,7 +198,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
               />
               <span>
                 <strong className="block font-medium">Local app-category insights</strong>
-                <span className="mt-1 block text-[11px] text-slate-500">Record only the foreground app name, such as VS Code or Outlook, to group dictation locally. Wisper never stores window titles, filenames, screen content, or typed text.</span>
+                <span className="mt-1 block text-[11px] text-slate-500">Record only the foreground app name, such as VS Code or Outlook, to group dictation locally. Hams never stores window titles, filenames, screen content, or typed text.</span>
               </span>
             </label>
           </div>

@@ -21,6 +21,7 @@ src-tauri/target/
 src-tauri/C*/
 tools/whisper.cpp/models/*.bin
 tools/whisper.cpp/models/*.incomplete-*
+tools/whisper.cpp/macos/
 w3_debug.png
 
 # Editor directories and files
