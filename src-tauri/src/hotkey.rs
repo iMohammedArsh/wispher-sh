@@ -8,16 +8,21 @@ use std::{
     process::{Command, Stdio},
 };
 
+#[cfg(target_os = "macos")]
+use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
+#[cfg(target_os = "macos")]
+use core_graphics::event::{
+    CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
+    CGEventType, EventField, KeyCode,
+};
+#[cfg(target_os = "macos")]
+use std::sync::atomic::AtomicBool;
 #[cfg(target_os = "windows")]
 use std::sync::{
     atomic::AtomicBool,
     mpsc::{self, Sender},
     Mutex, OnceLock,
 };
-#[cfg(target_os = "macos")]
-use std::sync::atomic::AtomicBool;
-#[cfg(target_os = "macos")]
-use rdev::{listen, Event, EventType, Key};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::{
     Foundation::{GetLastError, LPARAM, LRESULT, WPARAM},
@@ -70,10 +75,7 @@ impl HotkeyListener {
             }
 
             #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
-            error(
-                "Background shortcuts are not supported on this platform."
-                    .into(),
-            );
+            error("Background shortcuts are not supported on this platform.".into());
         });
     }
 }
@@ -87,72 +89,89 @@ where
     FStart: Fn(bool) + Send + Sync + 'static,
     FStop: Fn() + Send + Sync + 'static,
 {
-    let command_down = Arc::new(AtomicBool::new(false));
-    let shift_down = Arc::new(AtomicBool::new(false));
-    let option_down = Arc::new(AtomicBool::new(false));
     let space_down = Arc::new(AtomicBool::new(false));
     let toggle_latched = Arc::new(AtomicBool::new(false));
     let mode = Arc::new(AtomicU8::new(0)); // 0 idle, 1 push-to-talk, 2 hands-free
 
-    println!(
-        "[Hotkey] macOS shortcuts ready: hold Cmd+Shift+Space; toggle Cmd+Shift+Option."
-    );
-    listen(move |event: Event| {
-        let (key, is_press, is_release) = match event.event_type {
-            EventType::KeyPress(key) => (key, true, false),
-            EventType::KeyRelease(key) => (key, false, true),
-            _ => return,
-        };
+    println!("[Hotkey] macOS shortcuts ready: hold Cmd+Shift+Space; toggle Cmd+Shift+Option.");
+    // Read only hardware key codes and modifier flags from CoreGraphics. The
+    // previous rdev listener translated every key through HIToolbox from this
+    // background thread. macOS 26 asserts that HIToolbox is main-thread-only,
+    // which caused Hams to crash as soon as the first keyboard event arrived.
+    let tap = CGEventTap::new(
+        CGEventTapLocation::HID,
+        CGEventTapPlacement::HeadInsertEventTap,
+        CGEventTapOptions::ListenOnly,
+        vec![
+            CGEventType::KeyDown,
+            CGEventType::KeyUp,
+            CGEventType::FlagsChanged,
+        ],
+        move |_proxy, event_type, event| {
+            let flags = event.get_flags();
+            let command_down = flags.contains(CGEventFlags::CGEventFlagCommand);
+            let shift_down = flags.contains(CGEventFlags::CGEventFlagShift);
+            let option_down = flags.contains(CGEventFlags::CGEventFlagAlternate);
 
-        match key {
-            Key::MetaLeft | Key::MetaRight => command_down.store(is_press, Ordering::SeqCst),
-            Key::ShiftLeft | Key::ShiftRight => shift_down.store(is_press, Ordering::SeqCst),
-            Key::Alt | Key::AltGr => option_down.store(is_press, Ordering::SeqCst),
-            Key::Space => {
-                if is_press
-                    && command_down.load(Ordering::SeqCst)
-                    && shift_down.load(Ordering::SeqCst)
-                    && !option_down.load(Ordering::SeqCst)
-                    && !space_down.swap(true, Ordering::SeqCst)
-                    && mode
-                        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
-                        .is_ok()
-                {
-                    on_start(false);
-                } else if is_release && space_down.swap(false, Ordering::SeqCst) {
-                    if mode
-                        .compare_exchange(1, 0, Ordering::SeqCst, Ordering::SeqCst)
-                        .is_ok()
+            if matches!(event_type, CGEventType::KeyDown | CGEventType::KeyUp) {
+                let key_code =
+                    event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
+                if key_code == KeyCode::SPACE {
+                    if matches!(event_type, CGEventType::KeyDown)
+                        && command_down
+                        && shift_down
+                        && !option_down
+                        && !space_down.swap(true, Ordering::SeqCst)
+                        && mode
+                            .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+                            .is_ok()
+                    {
+                        on_start(false);
+                    } else if matches!(event_type, CGEventType::KeyUp)
+                        && space_down.swap(false, Ordering::SeqCst)
+                        && mode
+                            .compare_exchange(1, 0, Ordering::SeqCst, Ordering::SeqCst)
+                            .is_ok()
                     {
                         on_stop();
                     }
                 }
             }
-            _ => {}
-        }
 
-        let toggle_chord = command_down.load(Ordering::SeqCst)
-            && shift_down.load(Ordering::SeqCst)
-            && option_down.load(Ordering::SeqCst);
-        if toggle_chord && !toggle_latched.swap(true, Ordering::SeqCst) {
-            match mode.load(Ordering::SeqCst) {
-                0 if mode
-                    .compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst)
-                    .is_ok() => on_start(true),
-                2 if mode
-                    .compare_exchange(2, 0, Ordering::SeqCst, Ordering::SeqCst)
-                    .is_ok() => on_stop(),
-                _ => {}
+            let toggle_chord = command_down && shift_down && option_down;
+            if toggle_chord && !toggle_latched.swap(true, Ordering::SeqCst) {
+                match mode.load(Ordering::SeqCst) {
+                    0 if mode
+                        .compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_ok() => on_start(true),
+                    2 if mode
+                        .compare_exchange(2, 0, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_ok() => on_stop(),
+                    _ => {}
+                }
+            } else if !toggle_chord {
+                toggle_latched.store(false, Ordering::SeqCst);
             }
-        } else if !toggle_chord && is_release {
-            toggle_latched.store(false, Ordering::SeqCst);
-        }
-    })
-    .map_err(|error| {
-        format!(
-            "macOS could not start global shortcuts: {error:?}. Allow Hams in System Settings → Privacy & Security → Input Monitoring, then restart Hams."
-        )
-    })
+
+            None
+        },
+    )
+    .map_err(|_| {
+        "macOS could not start global shortcuts. Allow Hams in System Settings → Privacy & Security → Input Monitoring, then restart Hams."
+            .to_string()
+    })?;
+
+    let run_loop = CFRunLoop::get_current();
+    let source = tap
+        .mach_port
+        .create_runloop_source(0)
+        .map_err(|_| "macOS could not create the shortcut event loop.".to_string())?;
+    unsafe {
+        run_loop.add_source(&source, kCFRunLoopCommonModes);
+    }
+    tap.enable();
+    CFRunLoop::run_current();
+    Err("The macOS global shortcut listener stopped unexpectedly.".into())
 }
 
 #[cfg(target_os = "windows")]
