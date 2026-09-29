@@ -163,7 +163,7 @@ impl OverlayController {
         }
         let result = WebviewWindowBuilder::new(app, "island", WebviewUrl::App("index.html".into()))
             .title("Hams voice status")
-            .inner_size(40.0, 8.0)
+            .inner_size(56.0, 10.0)
             .resizable(false)
             .decorations(false)
             .transparent(true)
@@ -177,7 +177,7 @@ impl OverlayController {
             Ok(window) => {
                 let _ = window.set_shadow(false);
                 if let Ok(Some(monitor)) = window.primary_monitor() {
-                    position_macos_window(&window, &monitor, 40, 8);
+                    position_macos_window(&window, &monitor, 56, 10);
                 }
             }
             Err(error) => eprintln!("[Overlay] Could not create the macOS island: {error}"),
@@ -273,9 +273,10 @@ impl OverlayController {
 #[cfg(target_os = "macos")]
 fn resize_macos_window(app: &AppHandle, state: &str) {
     let (width, height) = match state {
-        "recording" | "processing" => (118, 32),
-        "error" => (280, 52),
-        _ => (40, 8),
+        "recording" => (210, 48),
+        "processing" => (174, 44),
+        "error" => (320, 60),
+        _ => (56, 10),
     };
     if let Some(window) = app.get_webview_window("island") {
         let _ = window.set_size(LogicalSize::new(width as f64, height as f64));

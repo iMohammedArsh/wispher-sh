@@ -20,23 +20,46 @@ import { VocabularyManager } from "./components/VocabularyManager";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { AccessibilityGuide } from "./components/AccessibilityGuide";
 import { defaultHotkey, holdHotkeyLabel, isMacOS } from "./platform";
-import { currentWindow, currentWindowLabel } from "./tauri";
+import { currentWindow, currentWindowLabel, isTauriRuntime } from "./tauri";
+
+function overlayPreviewStatus(): AppStatus {
+  if (isTauriRuntime) {
+    return {
+      state_name: "Idle",
+      recording_mode: null,
+      last_dictation: "",
+      error_message: null,
+      delivery_message: null,
+    };
+  }
+  const preview = new URLSearchParams(window.location.search).get("overlay");
+  const stateByPreview: Record<string, string> = {
+    recording: "Recording",
+    processing: "Transcribing Audio",
+    formatting: "Formatting Text",
+    pasting: "Pasting",
+    error: "Error",
+  };
+  return {
+    state_name: stateByPreview[preview ?? ""] ?? "Idle",
+    recording_mode: preview === "recording" ? "push-to-talk" : null,
+    last_dictation: "",
+    error_message:
+      preview === "error" ? "Hams could not reach the speech model." : null,
+    delivery_message: null,
+  };
+}
 
 function DynamicIsland() {
-  const [status, setStatus] = useState<AppStatus>({
-    state_name: "Idle",
-    recording_mode: null,
-    last_dictation: "",
-    error_message: null,
-    delivery_message: null,
-  });
-  const [audioLevel, setAudioLevel] = useState(0);
+  const [status, setStatus] = useState<AppStatus>(overlayPreviewStatus);
+  const [audioLevel, setAudioLevel] = useState(isTauriRuntime ? 0 : 0.72);
   const [errorExpanded, setErrorExpanded] = useState(false);
   useLayoutEffect(() => {
     document.body.classList.add("overlay-window");
     return () => document.body.classList.remove("overlay-window");
   }, []);
   useEffect(() => {
+    if (!isTauriRuntime) return;
     invoke<AppStatus>("get_app_status")
       .then(setStatus)
       .catch(() => undefined);
@@ -55,7 +78,9 @@ function DynamicIsland() {
     };
   }, []);
   const recording = status.state_name === "Recording";
-  const busy = ["Transcribing Audio", "Pasting"].includes(status.state_name);
+  const busy = ["Transcribing Audio", "Formatting Text", "Pasting"].includes(
+    status.state_name,
+  );
   const hasError = Boolean(status.error_message);
   useEffect(() => {
     if (!status.error_message) {
@@ -81,6 +106,12 @@ function DynamicIsland() {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 78);
+  const busyLabel =
+    status.state_name === "Formatting Text"
+      ? "Polishing"
+      : status.state_name === "Pasting"
+        ? "Delivering"
+        : "Transcribing";
   return (
     <main className="overlay-root">
       <section
@@ -106,25 +137,30 @@ function DynamicIsland() {
             >
               <X />
             </button>
-            <div
-              className="overlay-wave"
-              aria-label="Live voice modulation level"
-            >
-              {Array.from({ length: 9 }).map((_, index) => {
-                const contour = 0.35 + Math.sin((index + 1) * 1.1) ** 2 * 0.65;
-                const height = Math.max(
-                  3,
-                  Math.min(22, 4 + visibleLevel * contour * 22),
-                );
-                const opacity = 0.45 + visibleLevel * 0.55;
-                return (
-                  <i
-                    key={index}
-                    className="overlay-bar"
-                    style={{ height: `${height}px`, opacity }}
-                  />
-                );
-              })}
+            <div className="overlay-live">
+              <div
+                className="overlay-wave"
+                aria-label="Live voice modulation level"
+              >
+                {Array.from({ length: 11 }).map((_, index) => {
+                  const contour = 0.28 + Math.sin((index + 1) * 1.08) ** 2 * 0.72;
+                  const height = Math.max(
+                    3,
+                    Math.min(20, 3 + visibleLevel * contour * 20),
+                  );
+                  const opacity = 0.42 + visibleLevel * 0.58;
+                  return (
+                    <i
+                      key={index}
+                      className="overlay-bar"
+                      style={{ height: `${height}px`, opacity }}
+                    />
+                  );
+                })}
+              </div>
+              <span className="overlay-live-label">
+                <i /> Listening
+              </span>
             </div>
             <button
               className="overlay-action finish"
@@ -140,17 +176,20 @@ function DynamicIsland() {
           </>
         )}
         {busy && (
-          <div
-            className="overlay-processing-wave"
-            aria-label="Processing dictation"
-          >
-            {Array.from({ length: 7 }).map((_, index) => (
-              <i
-                key={index}
-                className="overlay-processing-bar"
-                style={{ animationDelay: `${index * 90}ms` }}
-              />
-            ))}
+          <div className="overlay-busy-container" aria-label={busyLabel}>
+            <div className="overlay-orbit" aria-hidden="true">
+              <i />
+            </div>
+            <span>{busyLabel}</span>
+            <div className="overlay-processing-wave" aria-hidden="true">
+              {Array.from({ length: 5 }).map((_, index) => (
+                <i
+                  key={index}
+                  className="overlay-processing-bar"
+                  style={{ animationDelay: `${index * 85}ms` }}
+                />
+              ))}
+            </div>
           </div>
         )}
         {hasError && (
