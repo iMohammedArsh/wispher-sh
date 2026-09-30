@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod class_sessions;
 pub mod clipboard;
 pub mod gemini;
 pub mod history;
@@ -16,6 +17,7 @@ use tauri::{
 };
 
 use audio::{AudioDiagnostics, AudioRecorder};
+use class_sessions::{fallback_notes, ClassRecordingStatus, ClassSession, ClassSessionStore};
 use clipboard::{ClipboardInjector, DeliveryMode, ForegroundTarget};
 #[allow(unused_imports)]
 use gemini::GeminiFormatter;
@@ -245,6 +247,9 @@ pub struct AppState {
     pub recording_category: Arc<Mutex<String>>,
     pub overlay: OverlayController,
     pub warm_whisper: Arc<Mutex<WarmWhisperServer>>,
+    pub class_recorder: Arc<AudioRecorder>,
+    pub class_sessions: Arc<Mutex<ClassSessionStore>>,
+    pub class_recording: Arc<Mutex<ClassRecordingStatus>>,
 }
 
 pub mod commands {
@@ -276,6 +281,156 @@ pub mod commands {
     #[tauri::command]
     pub fn get_audio_diagnostics(state: State<'_, AppState>) -> AudioDiagnostics {
         state.recorder.diagnostics()
+    }
+
+    #[tauri::command]
+    pub fn get_class_sessions(state: State<'_, AppState>) -> Vec<ClassSession> {
+        state.class_sessions.lock().unwrap().sessions()
+    }
+
+    #[tauri::command]
+    pub fn get_class_recording_status(state: State<'_, AppState>) -> ClassRecordingStatus {
+        state.class_recording.lock().unwrap().clone()
+    }
+
+    #[tauri::command]
+    pub fn start_class_recording(
+        app: AppHandle,
+        state: State<'_, AppState>,
+        title: String,
+    ) -> Result<ClassRecordingStatus, String> {
+        if state.status.lock().unwrap().state_name == "Recording" {
+            return Err("Finish the current dictation before recording a class.".into());
+        }
+        if state.class_recording.lock().unwrap().is_recording {
+            return Ok(state.class_recording.lock().unwrap().clone());
+        }
+        state.class_recorder.start_recording()?;
+        let started_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| format!("Could not timestamp the class recording: {error}"))?
+            .as_millis();
+        let status = ClassRecordingStatus {
+            is_recording: true,
+            started_at_ms: Some(started_at_ms),
+            title: Some(title.trim().to_string()),
+        };
+        *state.class_recording.lock().unwrap() = status.clone();
+        let _ = app.emit("class-recording-changed", status.clone());
+        Ok(status)
+    }
+
+    #[tauri::command]
+    pub fn stop_class_recording(
+        app: AppHandle,
+        state: State<'_, AppState>,
+    ) -> Result<ClassSession, String> {
+        let recording = state.class_recording.lock().unwrap().clone();
+        if !recording.is_recording {
+            return Err("No class recording is active.".into());
+        }
+        let gain_factor = state.settings.lock().unwrap().audio_gain_factor;
+        let captured = match state.class_recorder.stop_recording_and_process(gain_factor) {
+            Ok(captured) => captured,
+            Err(error) => {
+                *state.class_recording.lock().unwrap() = ClassRecordingStatus::default();
+                let _ = app.emit("class-recording-changed", ClassRecordingStatus::default());
+                return Err(error);
+            }
+        };
+        let title = recording.title.unwrap_or_default();
+        let session = match state.class_sessions.lock().unwrap().save_recording(
+            &title,
+            captured.diagnostics.recorded_duration_secs,
+            &captured.wav_bytes,
+        ) {
+            Ok(session) => session,
+            Err(error) => {
+                *state.class_recording.lock().unwrap() = ClassRecordingStatus::default();
+                let _ = app.emit("class-recording-changed", ClassRecordingStatus::default());
+                return Err(error);
+            }
+        };
+        *state.class_recording.lock().unwrap() = ClassRecordingStatus::default();
+        let _ = app.emit("class-recording-changed", ClassRecordingStatus::default());
+        let _ = app.emit(
+            "class-sessions-changed",
+            state.class_sessions.lock().unwrap().sessions(),
+        );
+
+        let (api_key, gemini_model, custom_dict, model_path, binary_path, language) = {
+            let settings = state.settings.lock().unwrap();
+            (
+                settings.gemini_api_key.clone(),
+                settings.gemini_model.clone(),
+                settings.custom_dictionary.clone(),
+                settings.whisper_model_path.clone(),
+                settings.whisper_binary_path.clone(),
+                settings.transcription_language.clone(),
+            )
+        };
+        let session_id = session.id.clone();
+        let session_title = session.title.clone();
+        let wav_bytes = captured.wav_bytes;
+        let sessions = Arc::clone(&state.class_sessions);
+        let app_handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let vad_model_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("tools")
+                .join("whisper.cpp")
+                .join("models")
+                .join("ggml-silero-v6.2.0.bin");
+            let transcript_result = tauri::async_runtime::spawn_blocking(move || {
+                WhisperTranscriber::new(
+                    model_path,
+                    binary_path,
+                    language,
+                    custom_dict,
+                    vad_model_path.is_file().then_some(vad_model_path),
+                )
+                .transcribe(&wav_bytes)
+            })
+            .await
+            .unwrap_or_else(|error| Err(format!("Class transcription task failed: {error}")));
+
+            match transcript_result {
+                Ok(transcript) => {
+                    let notes = if api_key.trim().is_empty() {
+                        fallback_notes(&session_title, &transcript)
+                    } else {
+                        GeminiFormatter::new(api_key, gemini_model)
+                            .create_class_notes(&transcript, &session_title)
+                            .await
+                            .unwrap_or_else(|error| {
+                                eprintln!("[Classes] AI notes fallback: {error}");
+                                fallback_notes(&session_title, &transcript)
+                            })
+                    };
+                    if let Err(error) =
+                        sessions
+                            .lock()
+                            .unwrap()
+                            .complete(&session_id, transcript, notes)
+                    {
+                        eprintln!("[Classes] Could not finish class metadata: {error}");
+                    }
+                }
+                Err(error) => {
+                    let message = format!(
+                        "The full audio was saved, but Hams could not create the transcript: {error}"
+                    );
+                    if let Err(save_error) = sessions.lock().unwrap().fail(&session_id, message) {
+                        eprintln!("[Classes] Could not save class error state: {save_error}");
+                    }
+                }
+            }
+            let updated = sessions.lock().unwrap().sessions();
+            let _ = app_handle.emit("class-sessions-changed", updated);
+        });
+
+        Ok(session)
     }
 
     #[tauri::command]
@@ -484,6 +639,9 @@ fn start_recording_internal(
     state: &AppState,
     recording_mode: &str,
 ) -> Result<(), String> {
+    if state.class_recording.lock().unwrap().is_recording {
+        return Err("A class recording is active. Finish it before starting dictation.".into());
+    }
     // Preserve the field the user selected before recording changes any Wisper UI state.
     *state.delivery_target.lock().unwrap() = ClipboardInjector::capture_foreground_target();
     let app_usage_tracking = state.settings.lock().unwrap().app_usage_tracking;
@@ -567,6 +725,9 @@ fn stop_recording_internal(app: &AppHandle, state: &AppState) -> Result<(), Stri
     let recording_category_ref = Arc::clone(&state.recording_category);
     let overlay_ref = state.overlay.clone();
     let warm_whisper_ref = Arc::clone(&state.warm_whisper);
+    let class_recorder_ref = Arc::clone(&state.class_recorder);
+    let class_sessions_ref = Arc::clone(&state.class_sessions);
+    let class_recording_ref = Arc::clone(&state.class_recording);
 
     tauri::async_runtime::spawn(async move {
         let local_state = AppState {
@@ -579,6 +740,9 @@ fn stop_recording_internal(app: &AppHandle, state: &AppState) -> Result<(), Stri
             recording_category: recording_category_ref,
             overlay: overlay_ref,
             warm_whisper: warm_whisper_ref,
+            class_recorder: class_recorder_ref,
+            class_sessions: class_sessions_ref,
+            class_recording: class_recording_ref,
         };
 
         // Step 1: Offline local Whisper.cpp speech recognition (No cloud API / No Gemini)
@@ -766,6 +930,9 @@ pub fn run() {
         recording_category: Arc::new(Mutex::new("other".into())),
         overlay: OverlayController::start(),
         warm_whisper: Arc::new(Mutex::new(WarmWhisperServer::default())),
+        class_recorder: Arc::new(AudioRecorder::new()),
+        class_sessions: Arc::new(Mutex::new(ClassSessionStore::load())),
+        class_recording: Arc::new(Mutex::new(ClassRecordingStatus::default())),
     };
 
     tauri::Builder::default()
@@ -909,6 +1076,10 @@ pub fn run() {
             commands::get_app_status,
             commands::overlay_ready,
             commands::get_audio_diagnostics,
+            commands::get_class_sessions,
+            commands::get_class_recording_status,
+            commands::start_class_recording,
+            commands::stop_class_recording,
             commands::get_dictation_history,
             commands::get_insights_summary,
             commands::add_correction_rule,

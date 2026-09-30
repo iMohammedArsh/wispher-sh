@@ -39,6 +39,24 @@ export interface DictationRecord {
   is_pinned?: boolean;
 }
 
+export interface ClassSession {
+  id: string;
+  title: string;
+  created_at_ms: number;
+  duration_secs: number;
+  audio_path: string;
+  transcript: string;
+  notes: string;
+  status: "processing" | "ready" | "error";
+  error_message: string | null;
+}
+
+export interface ClassRecordingStatus {
+  is_recording: boolean;
+  started_at_ms: number | null;
+  title: string | null;
+}
+
 export interface CorrectionRule {
   source: string;
   replacement: string;
@@ -60,7 +78,7 @@ export interface InsightsSummary {
   correction_rules: CorrectionRule[];
 }
 
-export type ActiveTab = "studio" | "history" | "insights" | "vocabulary" | "settings" | "guide";
+export type ActiveTab = "studio" | "classes" | "history" | "insights" | "vocabulary" | "settings" | "guide";
 
 export type TransformMode = "smart" | "raw" | "code" | "email" | "bullets";
 

@@ -148,7 +148,13 @@ impl AudioRecorder {
         // Let the capture thread receive the stop flag and flush its final callback.
         std::thread::sleep(std::time::Duration::from_millis(60));
 
-        let raw_samples = self.audio_data.lock().unwrap().clone();
+        // Move the capture buffer out instead of cloning it. This matters for
+        // long-form class recordings, where an hour of native-rate microphone
+        // samples can otherwise be held twice during finalization.
+        let raw_samples = {
+            let mut buffer = self.audio_data.lock().unwrap();
+            std::mem::take(&mut *buffer)
+        };
         let mut diagnostics = self.diagnostics();
         diagnostics.is_recording = false;
 
@@ -176,6 +182,9 @@ impl AudioRecorder {
         }
 
         let mut whisper_samples = resample_to_16khz(&raw_samples, diagnostics.native_sample_rate);
+        // The saved and transcribed WAV uses the smaller 16 kHz buffer; release
+        // native-rate samples before allocating the encoded WAV.
+        drop(raw_samples);
         // Whisper's feature extractor is more stable with a short silent tail than a
         // sub-second buffer. Padding preserves the original speech while avoiding a
         // low-context decode for quick commands.

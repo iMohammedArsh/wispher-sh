@@ -19,6 +19,7 @@ import { InsightsPanel } from "./components/InsightsPanel";
 import { VocabularyManager } from "./components/VocabularyManager";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { AccessibilityGuide } from "./components/AccessibilityGuide";
+import { ClassRecorder } from "./components/ClassRecorder";
 import { defaultHotkey, holdHotkeyLabel, isMacOS } from "./platform";
 import { currentWindow, currentWindowLabel, isTauriRuntime } from "./tauri";
 
@@ -395,6 +396,7 @@ export default function App() {
   };
   const titles: Record<ActiveTab, string> = {
     studio: "Dictation",
+    classes: "Classes",
     history: "History",
     insights: "Insights",
     vocabulary: "Vocabulary",
@@ -476,6 +478,7 @@ export default function App() {
               onPasteText={pasteText}
             />
           )}
+          {activeTab === "classes" && <ClassRecorder />}
           {activeTab === "insights" && (
             <InsightsPanel
               summary={insights}

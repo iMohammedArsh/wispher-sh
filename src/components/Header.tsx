@@ -4,6 +4,7 @@ import {
   CircleHelp,
   Clock3,
   ChartNoAxesCombined,
+  GraduationCap,
   Keyboard,
   Mic,
   Settings,
@@ -21,6 +22,7 @@ interface HeaderProps {
 
 const items: { id: ActiveTab; label: string; icon: React.ElementType }[] = [
   { id: "studio", label: "Dictation", icon: SquarePen },
+  { id: "classes", label: "Classes", icon: GraduationCap },
   { id: "history", label: "History", icon: Clock3 },
   { id: "insights", label: "Insights", icon: ChartNoAxesCombined },
   { id: "vocabulary", label: "Vocabulary", icon: BookOpen },

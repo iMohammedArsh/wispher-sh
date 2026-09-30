@@ -74,6 +74,17 @@ fn smart_dictation_instruction() -> String {
     )
 }
 
+fn class_notes_instruction() -> String {
+    String::from(
+        "You are Hams' class note maker. Turn the supplied class transcript into clear, study-ready notes without inventing information. \
+        Start with a short overview, then use descriptive headings and concise bullet points for the main ideas. \
+        Include a section named Key takeaways and, only when present in the transcript, sections for Definitions, Examples, Assignments, and Questions to review. \
+        Preserve names, equations, terminology, dates, and the language used by the speaker. \
+        If part of the transcript is uncertain or incomplete, say so instead of guessing. \
+        Return only the notes in plain Markdown.",
+    )
+}
+
 impl GeminiFormatter {
     pub fn new(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
@@ -256,5 +267,67 @@ impl GeminiFormatter {
         }
 
         Err("Gemini API returned empty candidates array.".into())
+    }
+
+    /// Convert a completed long-form class transcript into study-ready notes.
+    pub async fn create_class_notes(
+        &self,
+        transcript: &str,
+        title: &str,
+    ) -> Result<String, String> {
+        if self.api_key.trim().is_empty() {
+            return Err("Gemini API key is missing.".into());
+        }
+
+        let payload = GeminiAudioRequest {
+            system_instruction: Content {
+                parts: vec![Part::Text {
+                    text: class_notes_instruction(),
+                }],
+            },
+            contents: vec![Content {
+                parts: vec![Part::Text {
+                    text: format!("Class title: {title}\n\nTranscript:\n{transcript}"),
+                }],
+            }],
+        };
+
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+            self.model, self.api_key
+        );
+        let response = self
+            .client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|error| format!("HTTP request to Gemini API failed: {error}"))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("Gemini API error {status}: {body}"));
+        }
+        let data: GeminiResponse = response
+            .json()
+            .await
+            .map_err(|error| format!("Failed to parse Gemini response: {error}"))?;
+        let text = data
+            .candidates
+            .and_then(|candidates| candidates.into_iter().next())
+            .and_then(|candidate| candidate.content)
+            .and_then(|content| content.parts)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|part| part.text)
+            .collect::<Vec<_>>()
+            .join("");
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            Err("Gemini returned empty class notes.".into())
+        } else {
+            Ok(text)
+        }
     }
 }
