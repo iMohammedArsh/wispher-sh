@@ -234,15 +234,17 @@ impl OverlayController {
         let _ = (app, state);
     }
 
-    /// Reveal the native overlay only after the renderer has applied its overlay-only style.
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    /// Reveal the Windows idle indicator only after the renderer has applied its overlay style.
+    #[cfg(target_os = "windows")]
     pub fn reveal_when_ready(&self, app: &AppHandle) {
         if let Some(window) = app.get_webview_window("island") {
             let _ = window.show();
         }
     }
 
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    /// On macOS the idle overlay stays hidden. Active states reveal it from
+    /// `resize_macos_window`, avoiding a permanent strip over the user's workspace.
+    #[cfg(not(target_os = "windows"))]
     pub fn reveal_when_ready(&self, _app: &AppHandle) {}
 
     pub fn set_level(&self, rms_amplitude: f32) {
@@ -273,16 +275,22 @@ impl OverlayController {
 #[cfg(target_os = "macos")]
 fn resize_macos_window(app: &AppHandle, state: &str) {
     let (width, height) = match state {
-        "recording" => (286, 58),
-        "processing" => (252, 58),
-        "error" => (344, 68),
-        _ => (72, 14),
+        "recording" => (320, 64),
+        "processing" => (280, 62),
+        "error" => (380, 74),
+        _ => {
+            if let Some(window) = app.get_webview_window("island") {
+                let _ = window.hide();
+            }
+            return;
+        }
     };
     if let Some(window) = app.get_webview_window("island") {
         let _ = window.set_size(LogicalSize::new(width as f64, height as f64));
         if let Ok(Some(monitor)) = window.primary_monitor() {
             position_macos_window(&window, &monitor, width, height);
         }
+        let _ = window.show();
     }
 }
 

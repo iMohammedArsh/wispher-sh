@@ -176,8 +176,8 @@ function DynamicIsland() {
                 <span className="overlay-live-label">
                   <i />
                   {status.recording_mode === "Hands-free"
-                    ? "Hands-free"
-                    : "Listening"}
+                    ? "Hands-free recording"
+                    : "Release to send"}
                 </span>
                 <time>{elapsedLabel}</time>
               </div>

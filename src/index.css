@@ -19,7 +19,7 @@ button { cursor: pointer; } button:focus-visible, input:focus-visible, select:fo
 .overlay-live { position: relative; z-index: 1; display: flex; min-width: 0; flex: 1; align-items: center; justify-content: center; gap: 9px; padding: 0 8px; }
 .overlay-state-mark, .overlay-processing-mark { display: grid; width: 28px; height: 28px; flex: none; place-items: center; border: 1px solid rgba(116,231,169,.18); border-radius: 10px; background: rgba(83,208,140,.1); color: #83e8b1; box-shadow: inset 0 1px rgba(255,255,255,.05); }
 .overlay-state-mark svg, .overlay-processing-mark svg { width: 15px; height: 15px; stroke-width: 2; }
-.overlay-live-copy { display: grid; min-width: 50px; gap: 2px; line-height: 1; }
+.overlay-live-copy { display: grid; min-width: 88px; gap: 3px; line-height: 1; }
 .overlay-live-copy time { color: #858d88; font-size: 9px; font-variant-numeric: tabular-nums; letter-spacing: .08em; }
 .overlay-wave { display: flex; height: 28px; min-width: 42px; align-items: center; justify-content: center; gap: 2px; }
 .overlay-bar { width: 2px; min-height: 3px; border-radius: 4px; background: linear-gradient(180deg,#f3fff8,#67d99b); box-shadow: 0 0 5px rgba(100,216,153,.2); transition: height 65ms cubic-bezier(.2,.8,.2,1), opacity 65ms linear; }
