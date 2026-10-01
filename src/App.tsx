@@ -1,7 +1,7 @@
 import { useState, useEffect, useLayoutEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Check, Info, Keyboard, Minus, Square, X } from "lucide-react";
+import { AudioLines, Check, Info, Keyboard, Minus, Square, X } from "lucide-react";
 import {
   AppSettings,
   AppStatus,
@@ -55,6 +55,8 @@ function DynamicIsland() {
   const [status, setStatus] = useState<AppStatus>(overlayPreviewStatus);
   const [audioLevel, setAudioLevel] = useState(isTauriRuntime ? 0 : 0.72);
   const [errorExpanded, setErrorExpanded] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [actionPending, setActionPending] = useState<"finish" | "cancel" | null>(null);
   useLayoutEffect(() => {
     document.body.classList.add("overlay-window");
     return () => document.body.classList.remove("overlay-window");
@@ -84,6 +86,19 @@ function DynamicIsland() {
   );
   const hasError = Boolean(status.error_message);
   useEffect(() => {
+    if (!recording) {
+      setElapsedSeconds(0);
+      setActionPending(null);
+      return;
+    }
+    setElapsedSeconds(0);
+    const timer = window.setInterval(
+      () => setElapsedSeconds((seconds) => seconds + 1),
+      1000,
+    );
+    return () => window.clearInterval(timer);
+  }, [recording]);
+  useEffect(() => {
     if (!status.error_message) {
       setErrorExpanded(false);
       return;
@@ -103,6 +118,7 @@ function DynamicIsland() {
     );
   }
   const visibleLevel = Math.min(1, Math.max(0, audioLevel * 6.5));
+  const elapsedLabel = `${String(Math.floor(elapsedSeconds / 60)).padStart(2, "0")}:${String(elapsedSeconds % 60).padStart(2, "0")}`;
   const errorDetail = (status.error_message ?? "Something went wrong.")
     .replace(/\s+/g, " ")
     .trim()
@@ -113,6 +129,21 @@ function DynamicIsland() {
       : status.state_name === "Pasting"
         ? "Delivering"
         : "Transcribing";
+  const busyDetail =
+    status.state_name === "Formatting Text"
+      ? "Cleaning up your words"
+      : status.state_name === "Pasting"
+        ? "Sending to your last app"
+        : "Turning speech into text";
+  const runOverlayAction = (action: "finish" | "cancel") => {
+    if (actionPending) return;
+    setActionPending(action);
+    const command =
+      action === "finish"
+        ? "trigger_stop_dictation"
+        : "trigger_cancel_dictation";
+    invoke(command).catch(() => setActionPending(null));
+  };
   return (
     <main className="overlay-root">
       <section
@@ -130,15 +161,26 @@ function DynamicIsland() {
             <button
               className="overlay-action cancel"
               type="button"
-              onClick={() =>
-                invoke("trigger_cancel_dictation").catch(() => undefined)
-              }
+              onClick={() => runOverlayAction("cancel")}
+              disabled={actionPending !== null}
               aria-label="Discard recording"
               title="Discard recording"
             >
               <X />
             </button>
-            <div className="overlay-live">
+            <div className="overlay-live" aria-live="polite">
+              <div className="overlay-state-mark" aria-hidden="true">
+                <AudioLines />
+              </div>
+              <div className="overlay-live-copy">
+                <span className="overlay-live-label">
+                  <i />
+                  {status.recording_mode === "Hands-free"
+                    ? "Hands-free"
+                    : "Listening"}
+                </span>
+                <time>{elapsedLabel}</time>
+              </div>
               <div
                 className="overlay-wave"
                 aria-label="Live voice modulation level"
@@ -159,16 +201,12 @@ function DynamicIsland() {
                   );
                 })}
               </div>
-              <span className="overlay-live-label">
-                <i /> Listening
-              </span>
             </div>
             <button
-              className="overlay-action finish"
+              className={`overlay-action finish ${actionPending === "finish" ? "is-pending" : ""}`}
               type="button"
-              onClick={() =>
-                invoke("trigger_stop_dictation").catch(() => undefined)
-              }
+              onClick={() => runOverlayAction("finish")}
+              disabled={actionPending !== null}
               aria-label="Finish recording"
               title="Finish recording"
             >
@@ -178,19 +216,14 @@ function DynamicIsland() {
         )}
         {busy && (
           <div className="overlay-busy-container" aria-label={busyLabel}>
-            <div className="overlay-orbit" aria-hidden="true">
-              <i />
+            <div className="overlay-processing-mark" aria-hidden="true">
+              <AudioLines />
             </div>
-            <span>{busyLabel}</span>
-            <div className="overlay-processing-wave" aria-hidden="true">
-              {Array.from({ length: 5 }).map((_, index) => (
-                <i
-                  key={index}
-                  className="overlay-processing-bar"
-                  style={{ animationDelay: `${index * 85}ms` }}
-                />
-              ))}
+            <div className="overlay-busy-copy">
+              <strong>{busyLabel}</strong>
+              <span>{busyDetail}</span>
             </div>
+            <i className="overlay-progress-orbit" aria-hidden="true" />
           </div>
         )}
         {hasError && (
