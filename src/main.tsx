@@ -17,6 +17,7 @@ import { currentWindowLabel } from "./tauri";
 // This runs before React mounts. It prevents the island from ever painting with
 // the main application's light page styling while the React tree is starting.
 if (currentWindowLabel() === "island") {
+  document.documentElement.classList.add("overlay-window");
   document.body.classList.add("overlay-window");
 }
 

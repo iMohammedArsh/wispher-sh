@@ -59,8 +59,12 @@ function DynamicIsland() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [actionPending, setActionPending] = useState<"finish" | "cancel" | null>(null);
   useLayoutEffect(() => {
+    document.documentElement.classList.add("overlay-window");
     document.body.classList.add("overlay-window");
-    return () => document.body.classList.remove("overlay-window");
+    return () => {
+      document.documentElement.classList.remove("overlay-window");
+      document.body.classList.remove("overlay-window");
+    };
   }, []);
   useEffect(() => {
     if (!isTauriRuntime) return;
