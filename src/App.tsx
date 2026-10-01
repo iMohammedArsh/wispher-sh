@@ -20,6 +20,7 @@ import { VocabularyManager } from "./components/VocabularyManager";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { AccessibilityGuide } from "./components/AccessibilityGuide";
 import { ClassRecorder } from "./components/ClassRecorder";
+import { OverlayLab } from "./components/OverlayLab";
 import { defaultHotkey, holdHotkeyLabel, isMacOS } from "./platform";
 import { currentWindow, currentWindowLabel, isTauriRuntime } from "./tauri";
 
@@ -344,7 +345,11 @@ export default function App() {
   });
   const [history, setHistory] = useState<DictationRecord[]>([]);
   const [insights, setInsights] = useState<InsightsSummary | null>(null);
-  const [activeTab, setActiveTab] = useState<ActiveTab>("studio");
+  const [activeTab, setActiveTab] = useState<ActiveTab>(() =>
+    new URLSearchParams(window.location.search).get("view") === "overlay-lab"
+      ? "overlay-lab"
+      : "studio",
+  );
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [copiedText, setCopiedText] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
@@ -446,6 +451,7 @@ export default function App() {
     history: "History",
     insights: "Insights",
     vocabulary: "Vocabulary",
+    "overlay-lab": "Overlay Lab",
     settings: "Settings",
     guide: "Help",
   };
@@ -524,6 +530,7 @@ export default function App() {
               onPasteText={pasteText}
             />
           )}
+          {activeTab === "overlay-lab" && <OverlayLab />}
           {activeTab === "classes" && <ClassRecorder />}
           {activeTab === "insights" && (
             <InsightsPanel

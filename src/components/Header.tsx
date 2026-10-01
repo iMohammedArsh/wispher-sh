@@ -7,6 +7,7 @@ import {
   GraduationCap,
   Keyboard,
   Mic,
+  PanelsTopLeft,
   Settings,
   SquarePen,
 } from "lucide-react";
@@ -26,6 +27,7 @@ const items: { id: ActiveTab; label: string; icon: React.ElementType }[] = [
   { id: "history", label: "History", icon: Clock3 },
   { id: "insights", label: "Insights", icon: ChartNoAxesCombined },
   { id: "vocabulary", label: "Vocabulary", icon: BookOpen },
+  { id: "overlay-lab", label: "Overlay Lab", icon: PanelsTopLeft },
   { id: "settings", label: "Settings", icon: Settings },
 ];
 

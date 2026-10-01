@@ -78,7 +78,7 @@ export interface InsightsSummary {
   correction_rules: CorrectionRule[];
 }
 
-export type ActiveTab = "studio" | "classes" | "history" | "insights" | "vocabulary" | "settings" | "guide";
+export type ActiveTab = "studio" | "classes" | "history" | "insights" | "vocabulary" | "overlay-lab" | "settings" | "guide";
 
 export type TransformMode = "smart" | "raw" | "code" | "email" | "bullets";
 
