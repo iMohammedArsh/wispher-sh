@@ -257,6 +257,7 @@
   font-weight: 750;
 }
 .class-record-button:hover { transform: translateY(-1px); }
+.class-record-button:disabled { cursor: wait; opacity: .82; transform: none; }
 .class-record-button svg { width: 18px; height: 18px; }
 .is-live .class-record-button { color: #813a31; }
 .class-error {

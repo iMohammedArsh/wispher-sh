@@ -330,7 +330,7 @@ pub mod commands {
             return Err("No class recording is active.".into());
         }
         let gain_factor = state.settings.lock().unwrap().audio_gain_factor;
-        let captured = match state.class_recorder.stop_recording_and_process(gain_factor) {
+        let captured = match state.class_recorder.stop_recording_for_archive(gain_factor) {
             Ok(captured) => captured,
             Err(error) => {
                 *state.class_recording.lock().unwrap() = ClassRecordingStatus::default();

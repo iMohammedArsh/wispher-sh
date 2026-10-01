@@ -37,6 +37,7 @@ export function ClassRecorder() {
   const [title, setTitle] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isStopping, setIsStopping] = useState(false);
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -95,6 +96,8 @@ export function ClassRecorder() {
   };
 
   const stop = async () => {
+    if (isStopping) return;
+    setIsStopping(true);
     try {
       const session = await invoke<ClassSession>("stop_class_recording");
       setRecording(idleRecording);
@@ -103,6 +106,8 @@ export function ClassRecorder() {
       setError(null);
     } catch (reason) {
       setError(String(reason));
+    } finally {
+      setIsStopping(false);
     }
   };
 
@@ -141,9 +146,14 @@ export function ClassRecorder() {
             type="button"
             className="class-record-button"
             onClick={recording.is_recording ? stop : start}
+            disabled={isStopping}
           >
-            {recording.is_recording ? <CircleStop /> : <Mic2 />}
-            {recording.is_recording ? "Finish & make notes" : "Start recording"}
+            {isStopping ? <LoaderCircle className="class-spinner" /> : recording.is_recording ? <CircleStop /> : <Mic2 />}
+            {isStopping
+              ? "Saving recording…"
+              : recording.is_recording
+                ? "Finish & make notes"
+                : "Start recording"}
           </button>
         </div>
         {error && <div className="class-error">{error}</div>}

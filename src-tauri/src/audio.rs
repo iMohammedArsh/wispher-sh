@@ -109,6 +109,7 @@ impl AudioRecorder {
         let recording = Arc::clone(&self.recording);
         let buffer = Arc::clone(&self.audio_data);
         let diagnostics = Arc::clone(&self.diagnostics);
+        let (startup_tx, startup_rx) = std::sync::mpsc::sync_channel(1);
         std::thread::spawn(move || {
             let stream = match build_stream(
                 &device,
@@ -121,25 +122,51 @@ impl AudioRecorder {
                 Ok(stream) => stream,
                 Err(error) => {
                     recording.store(false, Ordering::SeqCst);
-                    diagnostics.lock().unwrap().message =
-                        Some(format!("Could not open microphone stream: {error}"));
+                    let message = format!("Could not open microphone stream: {error}");
+                    diagnostics.lock().unwrap().message = Some(message.clone());
+                    let _ = startup_tx.send(Err(message));
                     return;
                 }
             };
             if let Err(error) = stream.play() {
                 recording.store(false, Ordering::SeqCst);
-                diagnostics.lock().unwrap().message =
-                    Some(format!("Could not start microphone capture: {error}"));
+                let message = format!("Could not start microphone capture: {error}");
+                diagnostics.lock().unwrap().message = Some(message.clone());
+                let _ = startup_tx.send(Err(message));
                 return;
             }
+            let _ = startup_tx.send(Ok(()));
             while recording.load(Ordering::SeqCst) {
                 std::thread::sleep(std::time::Duration::from_millis(25));
             }
         });
-        Ok(())
+        match startup_rx.recv_timeout(std::time::Duration::from_secs(3)) {
+            Ok(result) => result,
+            Err(error) => {
+                self.recording.store(false, Ordering::SeqCst);
+                let message = format!("The microphone did not start in time: {error}");
+                self.set_failure(&message);
+                Err(message)
+            }
+        }
     }
 
     pub fn stop_recording_and_process(&self, gain_factor: f32) -> Result<RecordedAudio, String> {
+        self.stop_recording(gain_factor, true)
+    }
+
+    /// Stops a long-form capture while prioritizing preservation. Unlike quick
+    /// dictation, a quiet or very short class is still encoded and saved; any
+    /// transcription limitation is handled after the recording is safely on disk.
+    pub fn stop_recording_for_archive(&self, gain_factor: f32) -> Result<RecordedAudio, String> {
+        self.stop_recording(gain_factor, false)
+    }
+
+    fn stop_recording(
+        &self,
+        gain_factor: f32,
+        require_detected_voice: bool,
+    ) -> Result<RecordedAudio, String> {
         // Keep a tiny tail after the hotkey is released. WSLg/PulseAudio has buffering
         // latency, and ending at the exact key-up can cut off final consonants in short
         // words such as "hi".
@@ -165,7 +192,7 @@ impl AudioRecorder {
                 microphone_help("No audio was captured"),
             );
         }
-        if diagnostics.recorded_duration_secs < MIN_RECORDING_SECONDS {
+        if require_detected_voice && diagnostics.recorded_duration_secs < MIN_RECORDING_SECONDS {
             diagnostics.message = Some("Recording was too short to transcribe.".into());
             *self.diagnostics.lock().unwrap() = diagnostics.clone();
             return Err(
@@ -173,7 +200,7 @@ impl AudioRecorder {
                     .into(),
             );
         }
-        if diagnostics.rms_amplitude < SILENCE_RMS_THRESHOLD {
+        if require_detected_voice && diagnostics.rms_amplitude < SILENCE_RMS_THRESHOLD {
             diagnostics.message = Some("The microphone captured near-silence.".into());
             *self.diagnostics.lock().unwrap() = diagnostics.clone();
             return Err(
@@ -194,7 +221,11 @@ impl AudioRecorder {
         }
         let raw_rms = diagnostics.rms_amplitude;
         let applied_gain = enhance_headset_voice(&mut whisper_samples, gain_factor);
-        if diagnostics.is_clipping {
+        if !require_detected_voice && raw_rms < SILENCE_RMS_THRESHOLD {
+            diagnostics.message = Some(
+                "The class audio was saved, but the microphone captured near-silence.".into(),
+            );
+        } else if diagnostics.is_clipping {
             diagnostics.message = Some(
                 "Input clipped. Lower the microphone input level for clearer transcription."
                     .into(),
