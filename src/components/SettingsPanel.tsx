@@ -38,7 +38,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             Engine & Hardware Configuration
           </h3>
           <p className="text-xs text-slate-400">
-            Customize AI formatting keys, audio microphone boost gain, hotkeys, and paste behavior.
+            Configure Gemini 3.5 transcription, Gemini 3.1 formatting, audio gain, hotkeys, and delivery.
           </p>
         </div>
 
@@ -83,26 +83,28 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
               </button>
             </div>
             <p className="text-[11px] text-slate-500">
-              Sends transcript text—not audio—to Gemini for optional formatting. Local transcription remains available without a key.
+              When configured, audio is temporarily uploaded to Gemini 3.5 Transcribe and deleted after processing. Bundled local Whisper remains the automatic offline fallback.
             </p>
           </div>
 
           {/* Gemini Model Selector */}
           <div className="space-y-2">
             <label className="text-xs font-medium text-slate-300">
-              Gemini Model Version
+              Gemini 3.1 Formatting Model
             </label>
             <select
-              value={settings.gemini_model || "gemini-2.5-flash"}
+              value={settings.gemini_model || "gemini-3.1-flash-lite"}
               onChange={(e) =>
                 onUpdateSettings({ ...settings, gemini_model: e.target.value })
               }
               className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-purple-500 cursor-pointer"
             >
-              <option value="gemini-2.5-flash">Gemini 2.5 Flash (Ultra Fast - Recommended)</option>
-              <option value="gemini-2.5-pro">Gemini 2.5 Pro (Deepest Accuracy)</option>
-              <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+              <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite (Fast — Recommended)</option>
+              <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro Preview (Higher quality)</option>
             </select>
+            <p className="text-[11px] text-slate-500">
+              Speech recognition always uses Gemini 3.5 Transcribe when a key is available. This model cleans the transcript and creates class notes.
+            </p>
           </div>
         </div>
 
@@ -116,7 +118,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           <div className="space-y-3">
             <div className="flex justify-between items-center">
               <label className="text-xs font-medium text-slate-300">
-                Whisper Audio Gain Boost
+                Microphone Gain Boost
               </label>
               <span className="text-xs font-mono text-purple-400 font-bold bg-purple-950/60 px-2 py-0.5 rounded border border-purple-800/40">
                 {settings.audio_gain_factor}x
@@ -208,7 +210,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         <div className="bg-slate-950/50 border border-slate-800/80 rounded-2xl p-5 space-y-4">
           <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
             <Cpu className="w-4 h-4 text-emerald-400" />
-            Whisper Speech Engine
+            Offline Whisper Fallback
           </h4>
 
           {/* Whisper Model Path */}

@@ -114,7 +114,7 @@ impl Default for AppSettings {
         let (whisper_binary_path, whisper_model_path) = bundled_whisper_paths();
         Self {
             gemini_api_key: String::new(),
-            gemini_model: "gemini-3.5-flash".into(),
+            gemini_model: "gemini-3.1-flash-lite".into(),
             custom_dictionary: String::new(),
             whisper_model_path: whisper_model_path.to_string_lossy().into_owned(),
             whisper_binary_path: whisper_binary_path.to_string_lossy().into_owned(),
@@ -167,6 +167,14 @@ impl AppSettings {
         #[cfg(target_os = "macos")]
         if settings.hotkey_combo == "Ctrl+Shift+Space" {
             settings.hotkey_combo = default_hotkey_combo();
+            let _ = settings.save();
+        }
+
+        if !matches!(
+            settings.gemini_model.as_str(),
+            "gemini-3.1-flash-lite" | "gemini-3.1-pro-preview"
+        ) {
+            settings.gemini_model = "gemini-3.1-flash-lite".into();
             let _ = settings.save();
         }
 
@@ -279,11 +287,7 @@ pub mod commands {
     }
 
     #[tauri::command]
-    pub fn present_overlay_state(
-        app: AppHandle,
-        state: State<'_, AppState>,
-        state_name: String,
-    ) {
+    pub fn present_overlay_state(app: AppHandle, state: State<'_, AppState>, state_name: String) {
         state.overlay.present_renderer_state(&app, &state_name);
     }
 
@@ -382,27 +386,44 @@ pub mod commands {
         let session_title = session.title.clone();
         let wav_bytes = captured.wav_bytes;
         let sessions = Arc::clone(&state.class_sessions);
+        let warm_whisper = Arc::clone(&state.warm_whisper);
         let app_handle = app.clone();
         tauri::async_runtime::spawn(async move {
-            let vad_model_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap_or_else(|| std::path::Path::new("."))
-                .join("tools")
-                .join("whisper.cpp")
-                .join("models")
-                .join("ggml-silero-v6.2.0.bin");
-            let transcript_result = tauri::async_runtime::spawn_blocking(move || {
-                WhisperTranscriber::new(
-                    model_path,
-                    binary_path,
-                    language,
-                    custom_dict,
-                    vad_model_path.is_file().then_some(vad_model_path),
+            let transcript_result = if api_key.trim().is_empty() {
+                transcribe_with_local_whisper(
+                    &warm_whisper,
+                    &wav_bytes,
+                    &language,
+                    &custom_dict,
+                    &model_path,
+                    &binary_path,
                 )
-                .transcribe(&wav_bytes)
-            })
-            .await
-            .unwrap_or_else(|error| Err(format!("Class transcription task failed: {error}")));
+                .await
+            } else {
+                match GeminiFormatter::new(api_key.clone(), gemini_model.clone())
+                    .transcribe_audio(&wav_bytes, &language, &custom_dict)
+                    .await
+                {
+                    Ok(transcript) => Ok(transcript),
+                    Err(cloud_error) => {
+                        eprintln!("[Classes] Gemini 3.5 Transcribe fallback: {cloud_error}");
+                        transcribe_with_local_whisper(
+                            &warm_whisper,
+                            &wav_bytes,
+                            &language,
+                            &custom_dict,
+                            &model_path,
+                            &binary_path,
+                        )
+                        .await
+                        .map_err(|local_error| {
+                            format!(
+                                "Gemini 3.5 Transcribe failed ({cloud_error}). Local Whisper also failed ({local_error})."
+                            )
+                        })
+                    }
+                }
+            };
 
             match transcript_result {
                 Ok(transcript) => {
@@ -690,6 +711,55 @@ fn start_recording_internal(
     Ok(())
 }
 
+async fn transcribe_with_local_whisper(
+    warm_whisper: &Arc<Mutex<WarmWhisperServer>>,
+    wav_bytes: &[u8],
+    language: &str,
+    custom_dictionary: &str,
+    model_path: &str,
+    binary_path: &str,
+) -> Result<String, String> {
+    let vad_model_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("tools")
+        .join("whisper.cpp")
+        .join("models")
+        .join("ggml-silero-v6.2.0.bin");
+    let warm_endpoint = warm_whisper
+        .lock()
+        .unwrap()
+        .ensure_started(model_path, binary_path);
+    match warm_endpoint {
+        Ok(endpoint) => {
+            WarmWhisperServer::transcribe(&endpoint, wav_bytes, language, custom_dictionary)
+                .await
+                .or_else(|warm_error| {
+                    eprintln!("[Local Whisper] Warm server fallback: {warm_error}");
+                    WhisperTranscriber::new(
+                        model_path,
+                        binary_path,
+                        language,
+                        custom_dictionary,
+                        vad_model_path.is_file().then_some(vad_model_path),
+                    )
+                    .transcribe(wav_bytes)
+                })
+        }
+        Err(warm_error) => {
+            eprintln!("[Local Whisper] Warm server unavailable: {warm_error}");
+            WhisperTranscriber::new(
+                model_path,
+                binary_path,
+                language,
+                custom_dictionary,
+                vad_model_path.is_file().then_some(vad_model_path),
+            )
+            .transcribe(wav_bytes)
+        }
+    }
+}
+
 fn stop_recording_internal(app: &AppHandle, state: &AppState) -> Result<(), String> {
     if state.status.lock().unwrap().state_name != "Recording" {
         return Ok(());
@@ -754,50 +824,49 @@ fn stop_recording_internal(app: &AppHandle, state: &AppState) -> Result<(), Stri
             class_recording: class_recording_ref,
         };
 
-        // Step 1: Offline local Whisper.cpp speech recognition (No cloud API / No Gemini)
-        let vad_model_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .join("tools")
-            .join("whisper.cpp")
-            .join("models")
-            .join("ggml-silero-v6.2.0.bin");
-        let warm_endpoint = local_state
-            .warm_whisper
-            .lock()
-            .unwrap()
-            .ensure_started(&model_path, &binary_path);
-        let transcribed_words = match match warm_endpoint {
-            Ok(endpoint) => {
-                WarmWhisperServer::transcribe(&endpoint, &wav_bytes, &language, &custom_dict)
+        // Step 1: Gemini 3.5 Transcribe is primary when the user configured a
+        // Gemini key. The bundled local Whisper engine remains an automatic
+        // offline fallback for missing connectivity, API errors, or no key.
+        let cloud_transcriber = GeminiFormatter::new(api_key.clone(), gemini_model.clone());
+        let transcription_result = if api_key.trim().is_empty() {
+            transcribe_with_local_whisper(
+                &local_state.warm_whisper,
+                &wav_bytes,
+                &language,
+                &custom_dict,
+                &model_path,
+                &binary_path,
+            )
+            .await
+        } else {
+            match cloud_transcriber
+                .transcribe_audio(&wav_bytes, &language, &custom_dict)
+                .await
+            {
+                Ok(text) => Ok(text),
+                Err(cloud_error) => {
+                    eprintln!("[Gemini 3.5 Transcribe] Falling back locally: {cloud_error}");
+                    transcribe_with_local_whisper(
+                        &local_state.warm_whisper,
+                        &wav_bytes,
+                        &language,
+                        &custom_dict,
+                        &model_path,
+                        &binary_path,
+                    )
                     .await
-                    .or_else(|warm_error| {
-                        eprintln!("[Local Whisper] Warm server fallback: {warm_error}");
-                        WhisperTranscriber::new(
-                            model_path,
-                            binary_path,
-                            language,
-                            custom_dict.clone(),
-                            vad_model_path.is_file().then_some(vad_model_path),
+                    .map_err(|local_error| {
+                        format!(
+                            "Gemini 3.5 Transcribe failed ({cloud_error}). Local Whisper also failed ({local_error})."
                         )
-                        .transcribe(&wav_bytes)
                     })
+                }
             }
-            Err(warm_error) => {
-                eprintln!("[Local Whisper] Warm server unavailable: {warm_error}");
-                WhisperTranscriber::new(
-                    model_path,
-                    binary_path,
-                    language,
-                    custom_dict.clone(),
-                    vad_model_path.is_file().then_some(vad_model_path),
-                )
-                .transcribe(&wav_bytes)
-            }
-        } {
+        };
+        let transcribed_words = match transcription_result {
             Ok(words) => words,
             Err(e) => {
-                eprintln!("[Local Whisper Error]: {}", e);
+                eprintln!("[Transcription Error]: {}", e);
                 let clipping_hint = if audio_diagnostics.is_clipping {
                     " The microphone clipped; lower its level in Windows Sound settings and retry."
                 } else {
@@ -828,7 +897,7 @@ fn stop_recording_internal(app: &AppHandle, state: &AppState) -> Result<(), Stri
         );
 
         println!(
-            "\n[Offline Dictation Completed]\nSpoken Words: {}\nStats: {:.2}s, {:.1}KB",
+            "\n[Dictation Completed]\nSpoken Words: {}\nStats: {:.2}s, {:.1}KB",
             transcribed_words, duration_secs, kb_size
         );
 
@@ -845,8 +914,8 @@ fn stop_recording_internal(app: &AppHandle, state: &AppState) -> Result<(), Stri
             }
         };
 
-        // Step 2: Polish the local transcript when the user has configured the optional
-        // formatter. Gemini receives text only, never the recorded audio.
+        // Step 2: Gemini 3.1 polishes the transcript after Gemini 3.5 (or the
+        // local fallback) performs speech recognition.
         let (final_display, formatting_notice) = if api_key.trim().is_empty() {
             (
                 learned_transcript.clone(),

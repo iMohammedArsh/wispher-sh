@@ -334,7 +334,7 @@ export default function App() {
   if (currentWindowLabel() === "island") return <DynamicIsland />;
   const [settings, setSettings] = useState<AppSettings>({
     gemini_api_key: "",
-    gemini_model: "gemini-2.5-flash",
+    gemini_model: "gemini-3.1-flash-lite",
     custom_dictionary:
       "Tauri, Rust, Gemini, Whisper, cpal, rdev, enigo, arboard",
     whisper_model_path: "ggml-small.bin",
@@ -498,8 +498,8 @@ export default function App() {
                 <p>VOICE WORKSPACE</p>
                 <h1>Write without breaking your flow.</h1>
                 <span>
-                  Dictate locally, then Hams safely delivers the words to the
-                  input you selected.
+                  Transcribe with Gemini 3.5 or the bundled offline fallback,
+                  then safely deliver the words to your selected input.
                 </span>
               </header>
               <div className="workspace-grid">

@@ -1,6 +1,7 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 // ── Gemini Request Structures ──────────────────────────────────────────────
 
@@ -50,6 +51,20 @@ struct GeminiResponse {
     candidates: Option<Vec<GeminiCandidate>>,
 }
 
+#[derive(Deserialize)]
+struct UploadedFileResponse {
+    file: UploadedFile,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadedFile {
+    name: String,
+    uri: String,
+    mime_type: String,
+    state: Option<String>,
+}
+
 // ── Gemini Formatter ───────────────────────────────────────────────────────
 
 pub struct GeminiFormatter {
@@ -92,6 +107,173 @@ impl GeminiFormatter {
             model: model.into(),
             client: Client::new(),
         }
+    }
+
+    /// Transcribe WAV audio with Google's dedicated Gemini 3.5 speech model.
+    /// The temporary cloud file is deleted after the interaction completes.
+    pub async fn transcribe_audio(
+        &self,
+        wav_bytes: &[u8],
+        language: &str,
+        custom_dictionary: &str,
+    ) -> Result<String, String> {
+        if self.api_key.trim().is_empty() {
+            return Err("Gemini API key is missing.".into());
+        }
+
+        let uploaded = self.upload_audio(wav_bytes).await?;
+        let uploaded_name = uploaded.name.clone();
+        let uploaded = match self.wait_for_file(uploaded).await {
+            Ok(file) => file,
+            Err(error) => {
+                self.delete_file(&uploaded_name).await;
+                return Err(error);
+            }
+        };
+        let language_codes: Vec<&str> = match language {
+            "en" => vec!["en-US"],
+            "ml" => vec!["ml-IN"],
+            _ => Vec::new(),
+        };
+        let vocabulary = custom_dictionary
+            .split([',', '\n'])
+            .map(str::trim)
+            .filter(|term| !term.is_empty())
+            .take(1000)
+            .collect::<Vec<_>>();
+        let mut transcription_config = json!({
+            "mode": "verbatim",
+            "language_codes": language_codes,
+        });
+        if !vocabulary.is_empty() {
+            transcription_config["custom_vocabulary"] = json!(vocabulary);
+        }
+        let payload = json!({
+            "model": "gemini-3.5-transcribe",
+            "input": [{
+                "type": "audio",
+                "uri": uploaded.uri,
+                "mime_type": uploaded.mime_type,
+            }],
+            "generation_config": {
+                "transcription_config": transcription_config,
+            },
+        });
+
+        let response_result = self
+            .client
+            .post("https://generativelanguage.googleapis.com/v1beta/interactions")
+            .header("x-goog-api-key", &self.api_key)
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await;
+        self.delete_file(&uploaded.name).await;
+        let response = response_result
+            .map_err(|error| format!("Gemini 3.5 Transcribe request failed: {error}"))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("Gemini 3.5 Transcribe error {status}: {body}"));
+        }
+        let value: Value = response
+            .json()
+            .await
+            .map_err(|error| format!("Could not read Gemini transcription: {error}"))?;
+        interaction_output_text(&value)
+            .ok_or_else(|| "Gemini 3.5 Transcribe returned no spoken words.".into())
+    }
+
+    async fn upload_audio(&self, wav_bytes: &[u8]) -> Result<UploadedFile, String> {
+        let byte_count = wav_bytes.len().to_string();
+        let start = self
+            .client
+            .post("https://generativelanguage.googleapis.com/upload/v1beta/files")
+            .header("x-goog-api-key", &self.api_key)
+            .header("X-Goog-Upload-Protocol", "resumable")
+            .header("X-Goog-Upload-Command", "start")
+            .header("X-Goog-Upload-Header-Content-Length", &byte_count)
+            .header("X-Goog-Upload-Header-Content-Type", "audio/wav")
+            .header("Content-Type", "application/json")
+            .json(&json!({ "file": { "display_name": "Hams dictation" } }))
+            .send()
+            .await
+            .map_err(|error| format!("Could not start Gemini audio upload: {error}"))?;
+        if !start.status().is_success() {
+            let status = start.status();
+            let body = start.text().await.unwrap_or_default();
+            return Err(format!("Gemini upload error {status}: {body}"));
+        }
+        let upload_url = start
+            .headers()
+            .get("x-goog-upload-url")
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(|| "Gemini did not return an audio upload URL.".to_string())?
+            .to_string();
+        let uploaded = self
+            .client
+            .post(upload_url)
+            .header("Content-Length", &byte_count)
+            .header("X-Goog-Upload-Offset", "0")
+            .header("X-Goog-Upload-Command", "upload, finalize")
+            .header("Content-Type", "audio/wav")
+            .body(wav_bytes.to_vec())
+            .send()
+            .await
+            .map_err(|error| format!("Could not upload audio to Gemini: {error}"))?;
+        if !uploaded.status().is_success() {
+            let status = uploaded.status();
+            let body = uploaded.text().await.unwrap_or_default();
+            return Err(format!("Gemini audio upload error {status}: {body}"));
+        }
+        uploaded
+            .json::<UploadedFileResponse>()
+            .await
+            .map(|response| response.file)
+            .map_err(|error| format!("Could not read Gemini upload response: {error}"))
+    }
+
+    async fn wait_for_file(&self, mut file: UploadedFile) -> Result<UploadedFile, String> {
+        for _ in 0..30 {
+            match file.state.as_deref() {
+                None | Some("ACTIVE") => return Ok(file),
+                Some("FAILED") => return Err("Gemini could not process the uploaded audio.".into()),
+                _ => {}
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let response = self
+                .client
+                .get(format!(
+                    "https://generativelanguage.googleapis.com/v1beta/{}",
+                    file.name
+                ))
+                .header("x-goog-api-key", &self.api_key)
+                .send()
+                .await
+                .map_err(|error| format!("Could not check Gemini audio status: {error}"))?;
+            if !response.status().is_success() {
+                return Err(format!(
+                    "Gemini audio status check returned {}.",
+                    response.status()
+                ));
+            }
+            file = response
+                .json::<UploadedFile>()
+                .await
+                .map_err(|error| format!("Could not read Gemini audio status: {error}"))?;
+        }
+        Err("Gemini took too long to prepare the uploaded audio.".into())
+    }
+
+    async fn delete_file(&self, name: &str) {
+        let _ = self
+            .client
+            .delete(format!(
+                "https://generativelanguage.googleapis.com/v1beta/{name}"
+            ))
+            .header("x-goog-api-key", &self.api_key)
+            .send()
+            .await;
     }
 
     /// Transcribe raw WAV audio bytes using Gemini's multimodal audio input,
@@ -329,5 +511,57 @@ impl GeminiFormatter {
         } else {
             Ok(text)
         }
+    }
+}
+
+fn interaction_output_text(value: &Value) -> Option<String> {
+    let direct = value
+        .get("output_text")
+        .or_else(|| value.get("outputText"))
+        .and_then(Value::as_str);
+    if let Some(text) = direct.filter(|text| !text.trim().is_empty()) {
+        return Some(text.trim().to_string());
+    }
+    if let Some(outputs) = value.get("outputs").and_then(Value::as_array) {
+        let text = outputs
+            .iter()
+            .filter_map(|output| output.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("");
+        if !text.trim().is_empty() {
+            return Some(text.trim().to_string());
+        }
+    }
+    value
+        .get("steps")
+        .and_then(Value::as_array)
+        .and_then(|steps| {
+            steps.iter().rev().find_map(|step| {
+                let text = step
+                    .get("content")
+                    .and_then(Value::as_array)?
+                    .iter()
+                    .filter_map(|part| part.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("");
+                (!text.trim().is_empty()).then(|| text.trim().to_string())
+            })
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::interaction_output_text;
+    use serde_json::json;
+
+    #[test]
+    fn reads_interactions_text_output() {
+        let response = json!({
+            "steps": [{ "content": [{ "type": "text", "text": "  hello world  " }] }]
+        });
+        assert_eq!(
+            interaction_output_text(&response).as_deref(),
+            Some("hello world")
+        );
     }
 }
