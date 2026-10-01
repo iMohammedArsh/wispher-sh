@@ -229,9 +229,7 @@ impl OverlayController {
         #[cfg(target_os = "windows")]
         resize_native_window(app, state);
         #[cfg(target_os = "macos")]
-        if state == "idle" {
-            hide_macos_window(app);
-        }
+        resize_macos_window(app, state);
         #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
         let _ = (app, state);
     }

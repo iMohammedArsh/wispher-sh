@@ -64,9 +64,14 @@ function DynamicIsland() {
   }, []);
   useEffect(() => {
     if (!isTauriRuntime) return;
-    invoke<AppStatus>("get_app_status")
-      .then(setStatus)
-      .catch(() => undefined);
+    const synchronizeStatus = () =>
+      invoke<AppStatus>("get_app_status")
+        .then(setStatus)
+        .catch(() => undefined);
+    void synchronizeStatus();
+    // A hidden WKWebView can occasionally miss a native status event. This
+    // lightweight fallback lets it recover as soon as macOS wakes the overlay.
+    const statusTimer = window.setInterval(synchronizeStatus, 400);
     const unlistenStatus = listen<AppStatus>("status-changed", (event) =>
       setStatus(event.payload),
     );
@@ -77,6 +82,7 @@ function DynamicIsland() {
     // overlay-specific document class and produced the black idle pill.
     void invoke("overlay_ready");
     return () => {
+      window.clearInterval(statusTimer);
       unlistenStatus.then((fn) => fn());
       unlistenLevel.then((fn) => fn());
     };
