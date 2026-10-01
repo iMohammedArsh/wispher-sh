@@ -287,9 +287,9 @@ impl OverlayController {
 #[cfg(target_os = "macos")]
 fn resize_macos_window(app: &AppHandle, state: &str) {
     let (width, height) = match state {
-        "recording" => (320, 64),
-        "processing" => (280, 62),
-        "error" => (380, 74),
+        "recording" => (252, 50),
+        "processing" => (224, 50),
+        "error" => (300, 58),
         _ => {
             hide_macos_window(app);
             return;

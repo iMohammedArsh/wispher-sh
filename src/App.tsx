@@ -190,7 +190,7 @@ function DynamicIsland() {
                 <span className="overlay-live-label">
                   <i />
                   {status.recording_mode === "Hands-free"
-                    ? "Hands-free recording"
+                    ? "Hands-free"
                     : "Release to send"}
                 </span>
                 <time>{elapsedLabel}</time>
@@ -199,7 +199,7 @@ function DynamicIsland() {
                 className="overlay-wave"
                 aria-label="Live voice modulation level"
               >
-                {Array.from({ length: 11 }).map((_, index) => {
+                {Array.from({ length: 7 }).map((_, index) => {
                   const contour = 0.28 + Math.sin((index + 1) * 1.08) ** 2 * 0.72;
                   const height = Math.max(
                     3,
