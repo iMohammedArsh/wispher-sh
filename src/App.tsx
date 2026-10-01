@@ -311,6 +311,16 @@ function WindowTitleBar({ title }: { title: string }) {
 }
 
 export default function App() {
+  const standaloneOverlayLab =
+    !isTauriRuntime &&
+    new URLSearchParams(window.location.search).get("view") === "overlay-lab";
+  if (standaloneOverlayLab) {
+    return (
+      <main className="standalone-overlay-lab">
+        <OverlayLab />
+      </main>
+    );
+  }
   if (currentWindowLabel() === "island") return <DynamicIsland />;
   const [settings, setSettings] = useState<AppSettings>({
     gemini_api_key: "",

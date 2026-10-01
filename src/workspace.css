@@ -148,6 +148,17 @@
   display: grid;
   gap: 28px;
 }
+.standalone-overlay-lab {
+  width: 100%;
+  height: 100vh;
+  overflow: auto;
+  padding: clamp(28px, 5vw, 72px);
+  background: #efeee8;
+}
+.standalone-overlay-lab > .overlay-lab {
+  width: min(1180px, 100%);
+  margin: 0 auto;
+}
 .overlay-lab-heading {
   display: flex;
   align-items: end;
