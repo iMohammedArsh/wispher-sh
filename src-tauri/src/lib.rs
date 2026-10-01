@@ -279,6 +279,15 @@ pub mod commands {
     }
 
     #[tauri::command]
+    pub fn present_overlay_state(
+        app: AppHandle,
+        state: State<'_, AppState>,
+        state_name: String,
+    ) {
+        state.overlay.present_renderer_state(&app, &state_name);
+    }
+
+    #[tauri::command]
     pub fn get_audio_diagnostics(state: State<'_, AppState>) -> AudioDiagnostics {
         state.recorder.diagnostics()
     }
@@ -1075,6 +1084,7 @@ pub fn run() {
             commands::save_settings,
             commands::get_app_status,
             commands::overlay_ready,
+            commands::present_overlay_state,
             commands::get_audio_diagnostics,
             commands::get_class_sessions,
             commands::get_class_recording_status,

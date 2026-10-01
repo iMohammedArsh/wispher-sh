@@ -229,7 +229,9 @@ impl OverlayController {
         #[cfg(target_os = "windows")]
         resize_native_window(app, state);
         #[cfg(target_os = "macos")]
-        resize_macos_window(app, state);
+        if state == "idle" {
+            hide_macos_window(app);
+        }
         #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
         let _ = (app, state);
     }
@@ -246,6 +248,16 @@ impl OverlayController {
     /// `resize_macos_window`, avoiding a permanent strip over the user's workspace.
     #[cfg(not(target_os = "windows"))]
     pub fn reveal_when_ready(&self, _app: &AppHandle) {}
+
+    /// The macOS webview calls this after React has committed the matching UI.
+    /// Keeping presentation renderer-led prevents an idle frame from appearing
+    /// inside a recording-sized native window while status events are in flight.
+    pub fn present_renderer_state(&self, app: &AppHandle, state: &str) {
+        #[cfg(target_os = "macos")]
+        resize_macos_window(app, state);
+        #[cfg(not(target_os = "macos"))]
+        let _ = (app, state);
+    }
 
     pub fn set_level(&self, rms_amplitude: f32) {
         #[cfg(target_os = "linux")]
@@ -279,9 +291,7 @@ fn resize_macos_window(app: &AppHandle, state: &str) {
         "processing" => (280, 62),
         "error" => (380, 74),
         _ => {
-            if let Some(window) = app.get_webview_window("island") {
-                let _ = window.hide();
-            }
+            hide_macos_window(app);
             return;
         }
     };
@@ -291,6 +301,13 @@ fn resize_macos_window(app: &AppHandle, state: &str) {
             position_macos_window(&window, &monitor, width, height);
         }
         let _ = window.show();
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn hide_macos_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("island") {
+        let _ = window.hide();
     }
 }
 

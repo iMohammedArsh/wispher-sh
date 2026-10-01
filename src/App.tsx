@@ -85,6 +85,19 @@ function DynamicIsland() {
     status.state_name,
   );
   const hasError = Boolean(status.error_message);
+  const presentedOverlayState = recording
+    ? "recording"
+    : busy
+      ? "processing"
+      : hasError && errorExpanded
+        ? "error"
+        : "idle";
+  useLayoutEffect(() => {
+    if (!isTauriRuntime) return;
+    void invoke("present_overlay_state", {
+      stateName: presentedOverlayState,
+    });
+  }, [presentedOverlayState]);
   useEffect(() => {
     if (!recording) {
       setElapsedSeconds(0);
@@ -109,7 +122,7 @@ function DynamicIsland() {
   }, [status.error_message]);
   if (!recording && !busy && (!hasError || !errorExpanded)) {
     return (
-      <main className="overlay-root">
+      <main className="overlay-root is-idle">
         <section
           className="overlay-pill is-idle"
           aria-label="Hams ready for dictation"
