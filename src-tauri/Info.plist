@@ -2,6 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <!-- Adaptive (light / dark / tinted / clear) icon compiled into Assets.car by scripts/build-icon.sh -->
+  <key>CFBundleIconName</key>
+  <string>Hams</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Hams uses your microphone only while you dictate and transcribes your voice on this Mac.</string>
 </dict>

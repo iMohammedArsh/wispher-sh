@@ -15,6 +15,7 @@ export interface Status {
   message: string | null;
   text: string | null;
   app: string | null;
+  preview: boolean;
 }
 
 export type DeliveryMode = "paste_restore" | "paste" | "copy_only";
@@ -28,6 +29,18 @@ export interface AiSettings {
   timeout_ms: number;
 }
 
+export type StyleId = "default" | "messaging" | "email" | "code" | "docs";
+
+export interface StyleOverride {
+  prompt: string | null;
+  polish: boolean | null;
+}
+
+export interface AppRule {
+  app: string;
+  style: StyleId;
+}
+
 export interface Settings {
   dictate_shortcut: string;
   command_shortcut: string;
@@ -39,7 +52,10 @@ export interface Settings {
   delivery: DeliveryMode;
   remove_fillers: boolean;
   voice_commands: boolean;
+  live_preview: boolean;
   app_styles: boolean;
+  style_overrides: Partial<Record<StyleId, StyleOverride>>;
+  app_rules: AppRule[];
   learn_from_edits: boolean;
   ai: AiSettings;
   onboarding_done: boolean;
@@ -106,7 +122,7 @@ export interface ModelStatus {
 }
 
 export interface StyleInfo {
-  id: string;
+  id: StyleId;
   label: string;
   prompt: string;
   polish: boolean;
@@ -154,8 +170,11 @@ export const api = {
   requestAccessibility: () => call<boolean>("request_accessibility"),
   openPermissionSettings: (kind: string) => call<void>("open_permission_settings", { kind }),
   styles: () => call<StyleInfo[]>("styles"),
+  recentApps: () => call<string[]>("recent_apps"),
   defaultAiModel: (provider: AiProvider) => call<string>("default_ai_model", { provider }),
   testAi: () => call<string>("test_ai"),
+  autostartEnabled: () => call<boolean>("autostart_enabled"),
+  setAutostart: (enabled: boolean) => call<void>("set_autostart", { enabled }),
 };
 
 export function on<T>(event: string, handler: (payload: T) => void): Promise<UnlistenFn> {

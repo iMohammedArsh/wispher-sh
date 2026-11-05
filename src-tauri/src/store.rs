@@ -247,6 +247,18 @@ impl Store {
         Ok(rows)
     }
 
+    /// Apps dictated into recently, most used first (for style rules).
+    pub fn recent_apps(&self, limit: i64) -> AppResult<Vec<String>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT app FROM history WHERE app <> '' AND created_at > ?1
+             GROUP BY app ORDER BY COUNT(*) DESC, MAX(created_at) DESC LIMIT ?2",
+        )?;
+        let since = now_ms() - 90 * 86_400_000;
+        let rows = stmt.query_map(params![since, limit], |row| row.get(0))?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     pub fn latest_text(&self) -> AppResult<Option<String>> {
         Ok(self
             .conn

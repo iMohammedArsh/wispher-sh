@@ -7,13 +7,18 @@
 
   let status = $state<Status | null>(null);
   let level = $state(0);
+  let partial = $state("");
   let now = $state(Date.now());
   const BARS = 9;
   const shape = Array.from({ length: BARS }, (_, i) => 0.45 + 0.55 * Math.sin(((i + 0.5) / BARS) * Math.PI));
 
   onMount(() => {
     const unlisten = [
-      listen<Status>("status", (e) => (status = e.payload)),
+      listen<Status>("status", (e) => {
+        if (e.payload.phase !== "recording") partial = "";
+        status = e.payload;
+      }),
+      listen<string>("partial", (e) => (partial = e.payload)),
       listen<number>("level", (e) => (level = e.payload)),
     ];
     invoke<Status>("get_status").then((s) => (status = s)).catch(() => {});
@@ -32,7 +37,13 @@
   );
 </script>
 
-<div class="pill {phase}" class:command={status?.kind === "command"}>
+{#if phase === "recording" && status?.preview}
+  <div class="caption" aria-live="polite">
+    {#if partial}<p>{partial}</p>{:else}<p class="hint">Listening…</p>{/if}
+  </div>
+{/if}
+
+<div class="pill {phase}" class:command={status?.kind === "command"} class:below={phase === "recording" && status?.preview}>
   {#if phase === "recording"}
     <button class="icon" title="Cancel (Esc)" aria-label="Cancel" onclick={() => invoke("dictation_cancel")}>
       <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" /></svg>
@@ -68,6 +79,17 @@
     -webkit-user-select: none; user-select: none; cursor: default;
   }
   .pill.idle { display: none; }
+  .pill.below { inset: auto; bottom: 4px; left: 50%; transform: translateX(-50%); width: 204px; height: 40px; }
+  .caption {
+    position: fixed; left: 4px; right: 4px; top: 4px; bottom: 52px;
+    display: flex; flex-direction: column; justify-content: flex-end;
+    padding: 8px 14px; border-radius: 14px; overflow: hidden;
+    background: rgba(18, 18, 18, 0.86); color: #f3f3f3;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    -webkit-user-select: none; user-select: none;
+  }
+  .caption p { margin: 0; font-weight: 500; font-size: 13px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .caption .hint { opacity: 0.55; }
   .pill.error { border-radius: 14px; padding: 0 16px; background: rgba(120, 22, 18, 0.95); }
   .pill.command .bars span { background: #9ec5ff; }
   .icon {

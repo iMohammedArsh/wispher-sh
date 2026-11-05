@@ -1,6 +1,7 @@
 //! Typed settings stored as one JSON value in SQLite. API keys never live here:
 //! they go to the OS keychain (macOS Keychain / Windows Credential Manager).
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -8,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
 use crate::input::Shortcut;
+use crate::llm::styles::{AppRule, Style, StyleOverride, MAX_PROMPT_CHARS};
 use crate::store::Store;
 
 const SETTINGS_KEY: &str = "settings";
@@ -105,7 +107,13 @@ pub struct Settings {
     pub delivery: DeliveryMode,
     pub remove_fillers: bool,
     pub voice_commands: bool,
+    /// Show a live transcript in the overlay while recording (uses extra CPU/GPU).
+    pub live_preview: bool,
     pub app_styles: bool,
+    /// Per-style edits to the built-in prompt and AI on/off.
+    pub style_overrides: BTreeMap<Style, StyleOverride>,
+    /// Apps pinned to a style, checked before automatic detection.
+    pub app_rules: Vec<AppRule>,
     pub learn_from_edits: bool,
     pub ai: AiSettings,
     pub onboarding_done: bool,
@@ -125,7 +133,10 @@ impl Default for Settings {
             delivery: DeliveryMode::PasteRestore,
             remove_fillers: true,
             voice_commands: true,
+            live_preview: false,
             app_styles: true,
+            style_overrides: BTreeMap::new(),
+            app_rules: Vec::new(),
             learn_from_edits: true,
             ai: AiSettings::default(),
             onboarding_done: false,
@@ -145,6 +156,17 @@ impl Settings {
         if !self.paste_last_shortcut.trim().is_empty() {
             Shortcut::parse(&self.paste_last_shortcut)
                 .map_err(|e| AppError::Settings(format!("Paste-last shortcut: {e}")))?;
+        }
+        for (style, edit) in &self.style_overrides {
+            if edit.prompt.as_ref().is_some_and(|p| p.chars().count() > MAX_PROMPT_CHARS) {
+                return Err(AppError::Settings(format!(
+                    "The {} style prompt is too long (max {MAX_PROMPT_CHARS} characters).",
+                    style.label()
+                )));
+            }
+        }
+        if self.app_rules.iter().any(|r| r.app.trim().is_empty()) {
+            return Err(AppError::Settings("Each app rule needs an app name.".into()));
         }
         if self.ai.timeout_ms < 1_000 || self.ai.timeout_ms > 60_000 {
             return Err(AppError::Settings("AI timeout must be between 1 and 60 seconds.".into()));

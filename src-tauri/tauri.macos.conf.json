@@ -17,6 +17,15 @@
     ]
   },
   "bundle": {
-    "targets": ["app", "dmg"]
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "resources": {
+      "icons/macos/Assets.car": "Assets.car"
+    },
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
   }
 }

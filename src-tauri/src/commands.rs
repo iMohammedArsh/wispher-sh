@@ -226,6 +226,11 @@ pub fn styles() -> Vec<StyleInfo> {
 }
 
 #[tauri::command]
+pub fn recent_apps(state: State<'_, AppState>) -> AppResult<Vec<String>> {
+    state.store.recent_apps(20)
+}
+
+#[tauri::command]
 pub fn default_ai_model(provider: AiProvider) -> &'static str {
     LlmClient::default_model(provider)
 }
@@ -245,4 +250,17 @@ pub async fn test_ai(state: State<'_, AppState>) -> AppResult<String> {
             vocabulary: vec!["Hams".into()],
         })
         .await
+}
+
+#[tauri::command]
+pub fn autostart_enabled(app: AppHandle) -> bool {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+#[tauri::command]
+pub fn set_autostart(app: AppHandle, enabled: bool) -> AppResult<()> {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    if enabled { manager.enable() } else { manager.disable() }.map_err(|e| AppError::Settings(e.to_string()))
 }

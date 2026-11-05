@@ -29,6 +29,9 @@ use crate::text;
 const TAP: Duration = Duration::from_millis(220);
 /// How long to wait for the second tap of a double-tap.
 const DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(350);
+/// Live preview: how often the recent audio is re-transcribed, and how much of it.
+const PREVIEW_EVERY: Duration = Duration::from_millis(1_000);
+const PREVIEW_WINDOW_SECONDS: u32 = 20;
 
 // ---- seams -------------------------------------------------------------------
 
@@ -37,6 +40,10 @@ pub trait Recorder: Send + Sync {
     fn stop(&self) -> AppResult<Captured>;
     fn cancel(&self);
     fn level(&self) -> f32;
+    /// Whisper-ready copy of the most recent audio while still recording (live preview).
+    fn snapshot(&self) -> Option<Captured> {
+        None
+    }
 }
 
 impl Recorder for crate::audio::AudioRecorder {
@@ -52,12 +59,17 @@ impl Recorder for crate::audio::AudioRecorder {
     fn level(&self) -> f32 {
         crate::audio::AudioRecorder::level(self)
     }
+    fn snapshot(&self) -> Option<Captured> {
+        Some(crate::audio::AudioRecorder::snapshot(self, PREVIEW_WINDOW_SECONDS))
+    }
 }
 
 /// Where status updates go (the overlay and main window in the real app).
 pub trait Ui: Send + Sync {
     fn status(&self, status: &Status);
     fn level(&self, level: f32);
+    /// Live preview text while recording.
+    fn partial(&self, _text: &str) {}
     /// History, stats or the dictionary changed on disk.
     fn data_changed(&self) {}
 }
@@ -113,6 +125,8 @@ pub struct Status {
     pub message: Option<String>,
     pub text: Option<String>,
     pub app: Option<String>,
+    /// Live preview is on for this recording, so the overlay makes room for text.
+    pub preview: bool,
 }
 
 // ---- inputs ----------------------------------------------------------------------
@@ -171,6 +185,17 @@ struct Recording {
     target: Option<AppTarget>,
     started_at: i64,
     meter: JoinHandle<()>,
+    preview: Option<JoinHandle<()>>,
+}
+
+impl Recording {
+    /// Stop the background tasks tied to this recording.
+    fn stop_tasks(&self) {
+        self.meter.abort();
+        if let Some(preview) = &self.preview {
+            preview.abort();
+        }
+    }
 }
 
 enum State {
@@ -318,6 +343,7 @@ impl Actor {
                 }
             })
         };
+        let preview = (settings.live_preview && kind == Kind::Dictate).then(|| spawn_preview(&self.deps, &settings));
         let session = self.next_session;
         self.next_session += 1;
         let rec = Recording {
@@ -330,6 +356,7 @@ impl Actor {
             target,
             started_at: store::now_ms(),
             meter,
+            preview,
         };
         self.deps.ui.status(&recording_status(&rec));
         self.state = State::Recording(rec);
@@ -337,7 +364,7 @@ impl Actor {
 
     fn cancel(&mut self) {
         let State::Recording(rec) = std::mem::replace(&mut self.state, State::Idle) else { return };
-        rec.meter.abort();
+        rec.stop_tasks();
         self.deps.recording.store(false, Ordering::Release);
         let recorder = Arc::clone(&self.deps.recorder);
         tokio::task::spawn_blocking(move || recorder.cancel());
@@ -346,7 +373,7 @@ impl Actor {
 
     fn finish(&mut self) {
         let State::Recording(rec) = std::mem::replace(&mut self.state, State::Idle) else { return };
-        rec.meter.abort();
+        rec.stop_tasks();
         self.deps.recording.store(false, Ordering::Release);
         self.state = State::Processing(rec.session);
         let (deps, tx, session) = (self.deps.clone(), self.tx.clone(), rec.session);
@@ -379,8 +406,44 @@ fn recording_status(rec: &Recording) -> Status {
         locked: rec.mode == Mode::Locked,
         started_at: rec.started_at,
         app: rec.target.as_ref().map(|t| t.name.clone()),
+        preview: rec.preview.is_some(),
         ..Status::default()
     }
+}
+
+/// Re-transcribe the last few seconds about once a second and show it in the
+/// overlay. It's a preview only: the pasted text always comes from one final
+/// pass over the whole recording, so nothing here can affect the result.
+fn spawn_preview(deps: &Deps, settings: &Settings) -> JoinHandle<()> {
+    let (recorder, stt, ui) = (Arc::clone(&deps.recorder), Arc::clone(&deps.stt), Arc::clone(&deps.ui));
+    let dictionary = deps.store.dictionary().unwrap_or_default();
+    let request = SttRequest {
+        language: settings.language.clone(),
+        model: settings.model.clone(),
+        vocabulary: text::vocabulary(&dictionary),
+    };
+    let options = text::Options { voice_commands: settings.voice_commands, remove_fillers: settings.remove_fillers };
+    tokio::spawn(async move {
+        let mut shown = String::new();
+        loop {
+            tokio::time::sleep(PREVIEW_EVERY).await;
+            let (recorder, stt, request) = (Arc::clone(&recorder), Arc::clone(&stt), request.clone());
+            let heard = tokio::task::spawn_blocking(move || {
+                let captured = recorder.snapshot().filter(|c| c.has_speech)?;
+                stt.transcribe(&captured.samples, &request).ok()
+            })
+            .await
+            .ok()
+            .flatten();
+            if let Some(heard) = heard {
+                let text = text::clean(&heard, &options);
+                if text != shown {
+                    ui.partial(&text);
+                    shown = text;
+                }
+            }
+        }
+    })
 }
 
 // ---- the processing pipeline ------------------------------------------------------
@@ -442,10 +505,13 @@ async fn process(deps: &Deps, job: Job) {
         return deps.ui.status(&Status::default());
     }
 
-    let style = match (&job.target, settings.app_styles) {
-        (Some(target), true) => styles::detect(&target.id, &target.name),
-        _ => Style::Default,
-    };
+    let resolved = styles::resolve(
+        job.target.as_ref().map(|t| (t.id.as_str(), t.name.as_str())),
+        settings.app_styles,
+        &settings.app_rules,
+        &settings.style_overrides,
+    );
+    let style = resolved.style;
     let vocabulary = text::vocabulary(&dictionary);
     let polisher = (deps.polisher)(&settings);
 
@@ -456,11 +522,11 @@ async fn process(deps: &Deps, job: Job) {
                 (expansion, None)
             } else {
                 let long_enough = store::word_count(&cleaned) >= settings.ai.smart_skip_words as i64;
-                let (polished, notice) = if polisher.enabled() && style.polish_by_default() && long_enough {
+                let (polished, notice) = if polisher.enabled() && resolved.polish && long_enough {
                     deps.ui.status(&status(Phase::Polishing));
                     let request = llm::Request {
                         task: Task::Polish { transcript: cleaned.clone() },
-                        style_prompt: style.default_prompt().into(),
+                        style_prompt: resolved.prompt.clone(),
                         vocabulary,
                     };
                     match polisher.run(request).await {
@@ -488,7 +554,7 @@ async fn process(deps: &Deps, job: Job) {
                 .unwrap_or(None);
             let request = llm::Request {
                 task: Task::Edit { instruction: cleaned.clone(), selection },
-                style_prompt: style.default_prompt().into(),
+                style_prompt: resolved.prompt.clone(),
                 vocabulary,
             };
             match polisher.run(request).await {
@@ -572,6 +638,9 @@ mod tests {
         fn level(&self) -> f32 {
             0.5
         }
+        fn snapshot(&self) -> Option<Captured> {
+            Some(Captured { samples: vec![0.0; 16_000], duration_ms: 1_000, has_speech: *self.speech.lock() })
+        }
     }
 
     struct FakeStt(String);
@@ -604,12 +673,16 @@ mod tests {
     #[derive(Default)]
     struct FakeUi {
         statuses: Mutex<Vec<Status>>,
+        partials: Mutex<Vec<String>>,
     }
     impl Ui for FakeUi {
         fn status(&self, status: &Status) {
             self.statuses.lock().push(status.clone());
         }
         fn level(&self, _: f32) {}
+        fn partial(&self, text: &str) {
+            self.partials.lock().push(text.to_string());
+        }
     }
 
     struct FakePolisher(Option<AppResult<String>>);
@@ -634,6 +707,7 @@ mod tests {
         desktop: Arc<FakeDesktop>,
         ui: Arc<FakeUi>,
         store: Arc<Store>,
+        settings: Arc<SettingsStore>,
     }
 
     fn harness(transcript: &str, polish: Option<AppResult<String>>) -> Harness {
@@ -642,6 +716,7 @@ mod tests {
         let ui = Arc::new(FakeUi::default());
         let store = Arc::new(Store::open_in_memory().unwrap());
         let settings = Arc::new(SettingsStore::load(Arc::clone(&store)));
+        let settings_handle = Arc::clone(&settings);
         let polisher: Arc<dyn Polisher> = Arc::new(FakePolisher(polish));
         let controller = Controller::spawn(Deps {
             recorder: recorder.clone(),
@@ -650,11 +725,11 @@ mod tests {
             polisher: Arc::new(move |_| Arc::clone(&polisher)),
             ui: ui.clone(),
             store: store.clone(),
-            settings,
+            settings: settings.clone(),
             recording: Arc::new(AtomicBool::new(false)),
             own_pid: 1,
         });
-        Harness { controller, recorder, desktop, ui, store }
+        Harness { controller, recorder, desktop, ui, store, settings: settings_handle }
     }
 
     impl Harness {
@@ -693,6 +768,48 @@ mod tests {
         assert_eq!(h.phases().last(), Some(&Phase::Done));
         assert_eq!(h.store.history("", 10).unwrap()[0].text, "Hello world.");
         assert_eq!(h.store.history("", 10).unwrap()[0].delivery, "pasted");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn live_preview_shows_text_while_recording_only() {
+        let h = harness("um live words", None);
+        h.settings.save(Settings { live_preview: true, ..Settings::default() }).unwrap();
+        h.press();
+        tokio::time::sleep(Duration::from_millis(2_500)).await;
+        assert_eq!(*h.ui.partials.lock(), vec!["Live words".to_string()], "unchanged text is sent once");
+        assert!(h.ui.statuses.lock().iter().any(|s| s.phase == Phase::Recording && s.preview));
+        h.release();
+        settle().await;
+        let after_release = h.ui.partials.lock().len();
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert_eq!(h.ui.partials.lock().len(), after_release, "preview stops when recording ends");
+        assert_eq!(h.delivered(), vec!["Live words".to_string()]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn app_rule_and_style_override_shape_the_polish_request() {
+        use crate::llm::styles::{AppRule, StyleOverride};
+        let h = harness("please send the report today", Some(Ok("Polished.".into())));
+        let mut settings = Settings::default();
+        settings.ai.provider = crate::settings::AiProvider::Gemini;
+        settings.app_rules = vec![AppRule { app: "textedit".into(), style: Style::Code }];
+        h.settings.save(settings).unwrap();
+        h.press();
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        h.release();
+        settle().await;
+        // Code style skips AI by default, so the cleaned transcript is pasted as-is.
+        assert_eq!(h.delivered(), vec!["Please send the report today".to_string()]);
+        assert_eq!(h.store.history("", 1).unwrap()[0].style, "code");
+
+        let mut settings = h.settings.get();
+        settings.style_overrides.insert(Style::Code, StyleOverride { prompt: None, polish: Some(true) });
+        h.settings.save(settings).unwrap();
+        h.press();
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        h.release();
+        settle().await;
+        assert_eq!(h.delivered().last().map(String::as_str), Some("Polished."));
     }
 
     #[tokio::test(start_paused = true)]

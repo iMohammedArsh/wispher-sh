@@ -12,6 +12,7 @@
   let defaultModel = $state("");
   let aiTest = $state<{ ok: boolean; text: string } | null>(null);
   let testing = $state(false);
+  let openAtLogin = $state(false);
 
   const s = $derived(app.settings);
 
@@ -19,6 +20,7 @@
     api.models().then((m) => (models = m)).catch(() => {});
     api.microphones().then((m) => (microphones = m)).catch(() => {});
     api.permissions().then((p) => (permissions = p)).catch(() => {});
+    api.autostartEnabled().then((v) => (openAtLogin = v)).catch(() => {});
     const off = on<{ id: string; progress: number }>("model-progress", (p) => (progress = { ...progress, [p.id]: p.progress }));
     return () => void off.then((f) => f());
   });
@@ -194,6 +196,7 @@
       <hr />
       <label class="check"><input type="checkbox" checked={s.remove_fillers} onchange={(e) => app.save({ remove_fillers: e.currentTarget.checked })} /> Remove filler words (um, uh)</label>
       <label class="check"><input type="checkbox" checked={s.voice_commands} onchange={(e) => app.save({ voice_commands: e.currentTarget.checked })} /> Voice commands: “new line”, “new paragraph”, “scratch that”</label>
+      <label class="check"><input type="checkbox" checked={s.live_preview} onchange={(e) => app.save({ live_preview: e.currentTarget.checked })} /> Live preview: show words in the overlay as you speak <span class="small muted">(uses more battery)</span></label>
       <label class="check"><input type="checkbox" checked={s.learn_from_edits} onchange={(e) => app.save({ learn_from_edits: e.currentTarget.checked })} /> Suggest dictionary fixes when I edit a dictation</label>
     </section>
 
@@ -247,6 +250,22 @@
           {#if aiTest}<span class="small" class:error={!aiTest.ok}>{aiTest.text}</span>{/if}
         </div>
       {/if}
+    </section>
+
+    <section class="card stack">
+      <h2>General</h2>
+      <label class="check">
+        <input
+          type="checkbox"
+          checked={openAtLogin}
+          onchange={async (e) => {
+            const enabled = e.currentTarget.checked;
+            await app.run(() => api.setAutostart(enabled), enabled ? "Hams will open at login" : "Hams won’t open at login");
+            openAtLogin = await api.autostartEnabled().catch(() => enabled);
+          }}
+        />
+        Open Hams at login (starts quietly in the menu bar)
+      </label>
     </section>
 
     {#if permissions?.applicable}

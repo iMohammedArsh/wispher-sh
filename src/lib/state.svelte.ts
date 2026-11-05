@@ -9,6 +9,7 @@ const idle: Status = {
   message: null,
   text: null,
   app: null,
+  preview: false,
 };
 
 export type Route = "home" | "history" | "dictionary" | "snippets" | "styles" | "settings";

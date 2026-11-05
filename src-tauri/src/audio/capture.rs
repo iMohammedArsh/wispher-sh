@@ -77,6 +77,17 @@ impl AudioRecorder {
         Ok(dsp::prepare(&raw, rate))
     }
 
+    /// Whisper-ready copy of the last `seconds` of audio, without stopping.
+    pub fn snapshot(&self, seconds: u32) -> Captured {
+        let rate = self.shared.rate.load(Ordering::Relaxed);
+        let tail = {
+            let samples = self.shared.samples.lock();
+            let keep = (rate as usize * seconds as usize).min(samples.len());
+            samples[samples.len() - keep..].to_vec()
+        };
+        dsp::prepare(&tail, rate)
+    }
+
     /// Stop and throw the audio away.
     pub fn cancel(&self) {
         let _ = self.stop_raw();

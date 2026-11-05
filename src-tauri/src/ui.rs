@@ -32,6 +32,10 @@ impl Ui for TauriUi {
         let _ = self.app.emit_to(overlay::LABEL, "level", level);
     }
 
+    fn partial(&self, text: &str) {
+        let _ = self.app.emit_to(overlay::LABEL, "partial", text);
+    }
+
     fn data_changed(&self) {
         let _ = self.app.emit("data-changed", ());
     }

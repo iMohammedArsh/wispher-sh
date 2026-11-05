@@ -62,7 +62,13 @@ fn transcriber() -> Arc<dyn Transcriber> {
     Arc::new(Unavailable)
 }
 
+/// Launched by "Open at login": start quietly in the menu bar.
+const HIDDEN_ARG: &str = "--hidden";
+
 fn show_main(app: &AppHandle) {
+    // The Dock icon is only shown while the window is open; otherwise Hams lives in the menu bar.
+    #[cfg(target_os = "macos")]
+    let _ = app.set_dock_visibility(true);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
@@ -138,6 +144,13 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let separator = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&show, &paste, &separator, &quit])?;
     let mut tray = TrayIconBuilder::with_id("hams").menu(&menu).tooltip("Hams");
+    #[cfg(target_os = "macos")]
+    {
+        // Monochrome template image: macOS tints it to match the menu bar.
+        let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray/tray-template@2x.png"))?;
+        tray = tray.icon(icon).icon_as_template(true);
+    }
+    #[cfg(not(target_os = "macos"))]
     if let Some(icon) = app.default_window_icon() {
         tray = tray.icon(icon.clone());
     }
@@ -149,8 +162,12 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     })
     .build(app)?;
 
-    if !current.onboarding_done {
+    let launched_at_login = std::env::args().any(|a| a == HIDDEN_ARG);
+    if !launched_at_login || !current.onboarding_done {
         show_main(&handle);
+    } else {
+        #[cfg(target_os = "macos")]
+        let _ = handle.set_dock_visibility(false);
     }
     Ok(())
 }
@@ -160,6 +177,12 @@ pub fn run() {
     tracing::info!("Hams {} starting", env!("CARGO_PKG_VERSION"));
 
     let app = tauri::Builder::default()
+        // Must be first: a second launch just brings the running Hams forward.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![HIDDEN_ARG]),
+        ))
         .setup(setup)
         .on_window_event(|window, event| {
             // Closing the main window keeps Hams running in the menu bar.
@@ -167,6 +190,8 @@ pub fn run() {
                 if window.label() == "main" {
                     api.prevent_close();
                     let _ = window.hide();
+                    #[cfg(target_os = "macos")]
+                    let _ = window.app_handle().set_dock_visibility(false);
                 }
             }
         })
@@ -201,8 +226,11 @@ pub fn run() {
             commands::request_accessibility,
             commands::open_permission_settings,
             commands::styles,
+            commands::recent_apps,
             commands::default_ai_model,
             commands::test_ai,
+            commands::autostart_enabled,
+            commands::set_autostart,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Hams");

@@ -23,9 +23,11 @@ cargo test controller::           # one module; or a single test name
 # Real speech, end to end (macOS, needs the "small" model downloaded):
 say -o /tmp/hams.wav --data-format=LEI16@22050 "Hello from Hams. This is a dictation test."
 HAMS_TEST_WAV=/tmp/hams.wav cargo test --release real_speech -- --ignored --nocapture
+scripts/install-macos.sh          # release build → /Applications (signs with "Hams Local Signing" if present)
+scripts/build-icon.sh             # regenerate all icons from icons/source + Hams.icon (needs Xcode's actool)
 ```
 
-The npm `tauri` script prepends Homebrew rustup to `PATH`. Do the same in a shell if `cargo` isn't found. Dev builds compile `whisper-rs-sys`, `rubato` and the FFT crates at `opt-level = 3` (set in `Cargo.toml`), otherwise model load and inference are unusably slow.
+The npm `tauri` script prepends Homebrew rustup to `PATH`. Do the same in a shell if `cargo` isn't found. Dev builds compile `whisper-rs-sys`, `rubato` and the FFT crates at `opt-level = 3` (set in `Cargo.toml`), otherwise model load and inference are unusably slow. `build.rs` links clang's `libclang_rt.osx.a` because whisper.cpp's Metal code uses `@available`, and release links fail with an undefined `___isPlatformVersionAtLeast` without it.
 
 ## Architecture
 
@@ -72,5 +74,9 @@ The npm `tauri` script prepends Homebrew rustup to `PATH`. Do the same in a shel
 ## Status and known gaps
 
 - The Windows module (`platform/windows/`) is ported from v1 but has **not been compiled**. A macOS cross-check needs the MSVC SDK headers (for example via `cargo-xwin`). Build and test it on Windows before relying on it.
-- Not yet built: UI Automation selected-text on Windows, reading edited fields back for learning (only History edits are learned today), user-editable style prompts, live partial transcripts, Notes (long recording) mode, autostart, single instance, updater, and `tauri-specta` generated bindings.
+- Not yet built: UI Automation selected-text on Windows, reading edited fields back for learning (only History edits are learned today), Notes (long recording) mode, updater, and `tauri-specta` generated bindings.
+- Styles: `styles::resolve` applies `Settings.app_rules` (case-insensitive match on bundle id/exe or app name) before `detect`, then `style_overrides` (prompt and AI on/off; the UI stores only differences from the built-ins).
+- Live preview (`live_preview`, off by default): `spawn_preview` in the controller re-transcribes the last 20 s every second and emits `partial` to the overlay. It's display-only. Its task is aborted with the recording, but an in-flight Whisper call can delay the final transcription by one preview pass.
+- App lifecycle: `tauri-plugin-single-instance` (must stay the first plugin) and `tauri-plugin-autostart` (LaunchAgent with `--hidden`, which starts in the menu bar). On macOS the Dock icon is shown only while the main window is open.
+- Icons: `icons/Hams.icon` (Icon Composer) → `icons/macos/Assets.car`, which is bundled as a resource with `CFBundleIconName` = `Hams` in `Info.plist`. The tray uses `icons/tray/tray-template@2x.png` as a template image.
 - The design specs in `docs/superpowers/` describe v1 but still record the product intent: privacy, overlay behaviour, formatting rules and Malayalam support.
