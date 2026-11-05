@@ -1,43 +1,77 @@
 [package]
 name = "hams"
-version = "0.0.1"
-description = "Private, local-first voice dictation for macOS and Windows"
+version = "0.2.0"
+description = "Fast, private voice typing for macOS and Windows"
 authors = ["Mohammed Arsh"]
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [lib]
-# The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
-# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "hams_lib"
-crate-type = ["staticlib", "rlib"]
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = ["local-stt"]
+# In-process whisper.cpp. Disable to type-check without a C++ toolchain.
+local-stt = ["dep:whisper-rs"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
-indexmap = { version = "1.9.3", features = ["std"] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "macos-private-api", "protocol-asset"] }
-tauri-plugin-opener = "2"
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-arboard = "3.4.0"
-enigo = "0.3.0"
-cpal = "0.15.3"
-hound = "3.5.1"
-reqwest = { version = "0.12", features = ["json", "multipart"] }
-tokio = { version = "1", features = ["full"] }
-indexmap = { version = "1.9.3", features = ["std"] }
-base64 = "0.22"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+futures-util = "0.3"
+parking_lot = "0.12"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2"
+rusqlite = { version = "0.32", features = ["bundled"] }
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
 dirs = "5"
-[target.'cfg(target_os = "linux")'.dependencies]
-x11 = { version = "2", features = ["xlib"] }
+cpal = "0.15"
+rubato = "0.16"
+arboard = "3"
+regex = "1"
+whisper-rs = { version = "0.15", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-core-foundation = "0.10.1"
-core-graphics = "0.24.0"
+whisper-rs = { version = "0.15", optional = true, features = ["metal"] }
+core-foundation = "0.10"
+core-graphics = "0.24"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString"] }
+objc2-app-kit = { version = "0.3", features = ["NSRunningApplication", "NSWorkspace", "NSWindow", "NSResponder"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Threading",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "test-util"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+# whisper.cpp is unusably slow unoptimized; optimize it (and the DSP) even in dev builds.
+[profile.dev.package.whisper-rs-sys]
+opt-level = 3
+
+[profile.dev.package.rubato]
+opt-level = 3
+
+[profile.dev.package.realfft]
+opt-level = 3
+
+[profile.dev.package.rustfft]
+opt-level = 3

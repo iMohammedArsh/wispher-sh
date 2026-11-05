@@ -11,17 +11,15 @@ node_modules
 dist
 dist-ssr
 *.local
-.wisper-overlay-state
 .superpowers/
 .remember/
 .vs/
 .wisper-check-target/
 .wisper-msvc-check-target/
 src-tauri/target/
-src-tauri/C*/
 tools/whisper.cpp/models/*.bin
 tools/whisper.cpp/models/*.incomplete-*
-tools/whisper.cpp/macos/
+tools/
 w3_debug.png
 
 # Editor directories and files

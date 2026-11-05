@@ -1,11 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Hams",
-  "version": "0.0.1",
-  "identifier": "com.mohammedarsh.hams",
+  "version": "0.2.0",
+  "identifier": "com.wusla.hams",
   "build": {
-    "beforeDevCommand": "node scripts/ensure-vite.mjs",
-    "devUrl": "http://127.0.0.1:1430",
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1430/main.html",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
@@ -13,23 +13,18 @@
     "windows": [
       {
         "label": "main",
+        "url": "main.html",
         "title": "Hams",
-        "width": 900,
-        "height": 650,
-        "resizable": true,
-        "decorations": false,
-        "visible": true,
-        "backgroundColor": "#f3f1ec",
-        "center": true,
-        "focus": true
+        "width": 980,
+        "height": 680,
+        "minWidth": 760,
+        "minHeight": 540,
+        "visible": false,
+        "center": true
       }
     ],
     "security": {
-      "csp": null,
-      "assetProtocol": {
-        "enable": true,
-        "scope": ["$LOCALDATA/wisper/classes/**"]
-      }
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
     },
     "macOSPrivateApi": true
   },

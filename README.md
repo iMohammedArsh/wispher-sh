@@ -1,41 +1,30 @@
 # Hams
 
-Hams is a local-first voice-writing app for macOS and Windows. Hold a global shortcut, speak naturally, and Hams transcribes locally before pasting the result back into the app you were using.
+Hams is a voice typer for macOS and Windows. Hold a shortcut in any app, speak, and let go: clean text appears at your cursor.
 
-## macOS development
+- **Local speech recognition.** Whisper runs inside the app, Metal-accelerated on Apple Silicon. It works offline, and your audio never leaves the computer.
+- **Optional AI polish.** One call to Gemini, OpenAI, Anthropic, Groq, OpenRouter, a custom endpoint, or a local Ollama model. Only the transcript text is sent, never audio. If the call fails or times out, Hams pastes the locally cleaned text.
+- **Command mode.** Select text, hold the command shortcut, and say "make this more formal" or "translate to English".
+- **App-aware styles.** Writing is casual in chat apps, formal in email, and raw in code editors and terminals.
+- **Snippets, a personal dictionary that learns from your edits, voice commands** ("new line", "scratch that"), **Esc to cancel, and double-tap for hands-free.**
+- **Searchable history and local stats.** Everything is stored in one SQLite file. API keys live in the OS keychain.
 
-Requirements: macOS 12 or later, Apple Silicon or Intel, Xcode Command Line Tools, Homebrew, and Node.js 20+.
+## Development
+
+Requirements: Node 20+, Rust (stable), CMake and Xcode Command Line Tools (macOS). On Windows you need Visual Studio Build Tools instead.
 
 ```bash
 npm ci
-./scripts/setup-macos.sh
-npm run tauri:dev
+npm run tauri:dev     # run the app (Vite on 127.0.0.1:1430 + Rust)
+npm run check         # svelte-check + TypeScript
+npm test              # frontend unit tests (vitest)
+npm run build         # production frontend build
+npm run tauri:build   # installer / .app + .dmg
+(cd src-tauri && cargo test)   # Rust unit tests
 ```
 
-The setup script installs Rust and CMake when necessary, builds a Metal-enabled static `whisper.cpp` CLI/server for this Mac, and downloads the multilingual small model. Generated binaries and model files stay untracked.
+The first launch walks you through permissions and the model download. Models are stored in `~/Library/Application Support/Hams/models` (macOS) or `%APPDATA%\Hams\models` (Windows).
 
-On first launch, allow Hams under **System Settings → Privacy & Security**:
+macOS needs **Accessibility** access for the shortcut, pasting and reading selected text, and **Microphone** access, which macOS asks for the first time you dictate.
 
-- **Microphone** for recording
-- **Input Monitoring** for the global shortcut
-- **Accessibility** for pasting with `⌘V`
-
-Shortcuts on macOS:
-
-- Hold `⌘ + Shift + Space` for push-to-talk
-- Press `⌘ + Shift + Option` to start or stop hands-free recording
-
-## Privacy
-
-Speech recognition, history, vocabulary, and correction rules remain on the device. If the user adds a Gemini API key, Hams sends transcript text and custom vocabulary—not recorded audio—to Gemini for optional formatting.
-
-## Useful commands
-
-```bash
-npm run dev          # Browser UI preview with native calls gracefully unavailable
-npm run build        # Type-check and build the frontend
-npm run tauri:dev    # Run the native desktop app
-npm run tauri:build  # Produce a platform installer/bundle
-```
-
-Windows-specific hooks and paste delivery remain in the same Rust codebase behind target-specific compilation flags.
+Hams v1 data (`…/wisper/`) is imported once on first launch. The old files are read and never modified.

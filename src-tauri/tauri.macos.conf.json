@@ -3,28 +3,20 @@
     "windows": [
       {
         "label": "main",
+        "url": "main.html",
         "title": "Hams",
-        "width": 900,
-        "height": 650,
+        "width": 980,
+        "height": 680,
         "minWidth": 760,
-        "minHeight": 560,
-        "resizable": true,
-        "decorations": true,
-        "titleBarStyle": "Overlay",
-        "hiddenTitle": true,
-        "visible": true,
-        "backgroundColor": "#f3f1ec",
+        "minHeight": 540,
+        "visible": false,
         "center": true,
-        "focus": true
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ]
   },
   "bundle": {
-    "targets": ["app", "dmg"],
-    "resources": {
-      "../tools/whisper.cpp/macos/whisper-cli": "whisper/whisper-cli",
-      "../tools/whisper.cpp/macos/whisper-server": "whisper/whisper-server",
-      "../tools/whisper.cpp/models/ggml-small.bin": "whisper/ggml-small.bin"
-    }
+    "targets": ["app", "dmg"]
   }
 }

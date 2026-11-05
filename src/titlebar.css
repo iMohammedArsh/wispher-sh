@@ -1,4 +1,0 @@
-.titlebar-drag { display: flex; flex: 1; align-self: stretch; align-items: center; gap: 1rem; min-width: 0; }
-.window-actions { position: relative; z-index: 1; }
-.window-actions button:active { transform: none; background: #d1d3cd; }
-.window-actions .close-window:active { background: #a63d36; color: #fff; }

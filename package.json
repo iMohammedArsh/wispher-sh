@@ -1,33 +1,28 @@
 {
   "name": "hams",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1 --port 1430 --strictPort",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
+    "dev": "vite",
+    "build": "vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "vitest run",
     "tauri": "PATH=/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:$PATH tauri",
-    "tauri:dev": "PATH=/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:$PATH tauri dev",
-    "tauri:build": "PATH=/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:$PATH tauri build"
+    "tauri:dev": "npm run tauri dev",
+    "tauri:build": "npm run tauri build"
   },
   "dependencies": {
-    "@fontsource/dm-sans": "^5.3.0",
-    "@fontsource/dm-serif-display": "^5.3.0",
-    "@tailwindcss/vite": "^4.3.3",
-    "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-opener": "^2",
-    "lucide-react": "^1.31.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "tailwindcss": "^4.3.3"
+    "@tauri-apps/api": "^2.12.4"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2",
-    "@types/react": "^19.1.8",
-    "@types/react-dom": "^19.1.6",
-    "@vitejs/plugin-react": "^4.6.0",
-    "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "@sveltejs/vite-plugin-svelte": "^6.2.4",
+    "@tauri-apps/cli": "^2.12.4",
+    "@tsconfig/svelte": "^5.0.8",
+    "svelte": "^5.57.3",
+    "svelte-check": "^4.7.8",
+    "typescript": "~5.9",
+    "vite": "^7.3.7",
+    "vitest": "^5.1.0"
   }
 }

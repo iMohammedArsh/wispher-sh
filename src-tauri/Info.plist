@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Hams uses your microphone only while you dictate and transcribes your voice locally.</string>
+  <string>Hams uses your microphone only while you dictate and transcribes your voice on this Mac.</string>
 </dict>
 </plist>

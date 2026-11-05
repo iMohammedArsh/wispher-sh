@@ -1,0 +1,160 @@
+//! In-process whisper.cpp (Metal-accelerated on macOS). The model stays loaded
+//! between dictations, so there's no server process, port or WAV file involved.
+
+use std::path::PathBuf;
+
+use parking_lot::Mutex;
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState};
+
+use super::{models, sanitize, vocabulary_prompt, SttRequest, Transcriber};
+use crate::error::{AppError, AppResult};
+
+struct Loaded {
+    path: PathBuf,
+    // Field order matters: the state must drop before the context.
+    state: WhisperState,
+    _context: WhisperContext,
+}
+
+#[derive(Default)]
+pub struct WhisperEngine {
+    loaded: Mutex<Option<Loaded>>,
+}
+
+impl WhisperEngine {
+    pub fn new() -> Self {
+        whisper_rs::install_logging_hooks();
+        Self::default()
+    }
+
+    fn ensure_loaded<'a>(&self, slot: &'a mut Option<Loaded>, model: &str) -> AppResult<&'a mut Loaded> {
+        let path = models::path_for(model).ok_or_else(|| AppError::Model(format!("unknown model \"{model}\"")))?;
+        if !path.is_file() {
+            return Err(AppError::Model(format!(
+                "the {} model isn't downloaded yet. Open Settings → Model to download it.",
+                models::info(model).map(|m| m.label).unwrap_or(model)
+            )));
+        }
+        if slot.as_ref().map(|l| l.path != path).unwrap_or(true) {
+            *slot = None; // free the old model first
+            let started = std::time::Instant::now();
+            let context = WhisperContext::new_with_params(&path.to_string_lossy(), WhisperContextParameters::default())
+                .map_err(|e| AppError::Model(format!("could not load {}: {e}", path.display())))?;
+            let state = context
+                .create_state()
+                .map_err(|e| AppError::Model(format!("could not prepare the model: {e}")))?;
+            tracing::info!("Loaded Whisper model {} in {:?}", path.display(), started.elapsed());
+            *slot = Some(Loaded { path, state, _context: context });
+        }
+        Ok(slot.as_mut().expect("just loaded"))
+    }
+}
+
+impl Transcriber for WhisperEngine {
+    fn transcribe(&self, samples: &[f32], request: &SttRequest) -> AppResult<String> {
+        let mut slot = self.loaded.lock();
+        let loaded = self.ensure_loaded(&mut slot, &request.model)?;
+
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 8);
+        params.set_n_threads(threads as i32);
+        params.set_translate(false);
+        params.set_no_context(true);
+        params.set_no_timestamps(true);
+        params.set_print_special(false);
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_print_timestamps(false);
+        params.set_suppress_blank(true);
+        params.set_suppress_nst(true);
+        params.set_temperature(0.0);
+        let language = if request.language.is_empty() { "auto" } else { request.language.as_str() };
+        params.set_language(Some(language));
+        let prompt = vocabulary_prompt(&request.vocabulary);
+        if !prompt.is_empty() {
+            params.set_initial_prompt(&prompt);
+        }
+
+        let started = std::time::Instant::now();
+        loaded
+            .state
+            .full(params, samples)
+            .map_err(|e| AppError::Transcription(format!("Whisper failed: {e}")))?;
+        let mut text = String::new();
+        for segment in loaded.state.as_iter() {
+            if segment.no_speech_probability() > 0.8 {
+                continue;
+            }
+            if let Ok(words) = segment.to_str_lossy() {
+                text.push_str(&words);
+                text.push(' ');
+            }
+        }
+        tracing::debug!(
+            "Whisper: {:.1}s of audio in {:?}",
+            samples.len() as f32 / 16_000.0,
+            started.elapsed()
+        );
+        Ok(sanitize(&text))
+    }
+
+    fn warm_up(&self, model: &str) {
+        let request = SttRequest { language: "en".into(), model: model.into(), vocabulary: Vec::new() };
+        // One second of near-silence compiles GPU kernels so the first real dictation is fast.
+        let silence = vec![0.0_f32; 16_000];
+        match self.transcribe(&silence, &request) {
+            Ok(_) => tracing::info!("Whisper warmed up"),
+            Err(error) => tracing::info!("Whisper warm-up skipped: {error}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Minimal 16-bit PCM WAV reader for the test fixture.
+    fn read_wav(path: &str) -> (Vec<f32>, u32) {
+        let bytes = std::fs::read(path).expect("read wav");
+        let (mut rate, mut channels) = (16_000u32, 1usize);
+        let mut i = 12;
+        while i + 8 <= bytes.len() {
+            let id = &bytes[i..i + 4];
+            let size = u32::from_le_bytes(bytes[i + 4..i + 8].try_into().unwrap()) as usize;
+            let body = &bytes[i + 8..(i + 8 + size).min(bytes.len())];
+            if id == b"fmt " {
+                channels = u16::from_le_bytes([body[2], body[3]]) as usize;
+                rate = u32::from_le_bytes(body[4..8].try_into().unwrap());
+            } else if id == b"data" {
+                let samples = body
+                    .chunks_exact(2 * channels)
+                    .map(|f| i16::from_le_bytes([f[0], f[1]]) as f32 / 32768.0)
+                    .collect();
+                return (samples, rate);
+            }
+            i += 8 + size + (size & 1);
+        }
+        panic!("no data chunk");
+    }
+
+    /// End-to-end: real speech through DSP and Whisper. Needs a downloaded model.
+    /// macOS: `say -o /tmp/hams.wav --data-format=LEI16@22050 "Hello from Hams. This is a dictation test."`
+    /// then `HAMS_TEST_WAV=/tmp/hams.wav cargo test --release real_speech -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn real_speech_is_transcribed() {
+        let path = std::env::var("HAMS_TEST_WAV").expect("set HAMS_TEST_WAV");
+        let model = std::env::var("HAMS_TEST_MODEL").unwrap_or_else(|_| "small".into());
+        let (raw, rate) = read_wav(&path);
+        let captured = crate::audio::dsp::prepare(&raw, rate);
+        assert!(captured.has_speech);
+        let engine = WhisperEngine::new();
+        let request = SttRequest { language: "en".into(), model, vocabulary: vec!["Hams".into()] };
+        engine.transcribe(&captured.samples[..16_000], &request).ok(); // warm-up
+        let started = std::time::Instant::now();
+        let text = engine.transcribe(&captured.samples, &request).unwrap();
+        println!("{:?} in {:?}", text, started.elapsed());
+        let lower = text.to_lowercase();
+        assert!(lower.contains("hello") && lower.contains("dictation"), "got {text:?}");
+    }
+}
