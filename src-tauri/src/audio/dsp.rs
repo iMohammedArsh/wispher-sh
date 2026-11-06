@@ -169,6 +169,46 @@ pub fn meter_level(frame: &[f32]) -> f32 {
     ((db + 60.0) / 50.0).clamp(0.0, 1.0)
 }
 
+/// Notes mode: once `buffer` holds at least `min_seconds`, remove and return
+/// its front, cut at the quietest moment of the last 3 seconds so no word is
+/// split between chunks.
+pub fn take_chunk(buffer: &mut Vec<f32>, rate: u32, min_seconds: u32) -> Option<Vec<f32>> {
+    if buffer.len() < rate as usize * min_seconds as usize {
+        return None;
+    }
+    let cut = quiet_split(buffer, rate, rate as usize * 3);
+    Some(buffer.drain(..cut).collect())
+}
+
+/// Where to cut a long recording into chunks, searching the last `search`
+/// samples: the quietest stretch of about 200 ms, cut at its quietest 10 ms.
+/// Looking at a stretch rather than a single frame matters: the closure of a
+/// "p" or "t" inside a word can be as silent as a pause, but it's far shorter.
+pub fn quiet_split(samples: &[f32], rate: u32, search: usize) -> usize {
+    const FRAME_MS: usize = 10;
+    const STRETCH_FRAMES: usize = 20;
+    let frame = (rate as usize * FRAME_MS / 1000).max(1);
+    let start = samples.len().saturating_sub(search);
+    let energies: Vec<f32> =
+        samples[start..].chunks_exact(frame).map(|f| f.iter().map(|s| s * s).sum::<f32>()).collect();
+    if energies.is_empty() {
+        return samples.len();
+    }
+    let width = STRETCH_FRAMES.min(energies.len());
+    let mut sum: f32 = energies[..width].iter().sum();
+    let mut best = (sum, 0);
+    for i in width..energies.len() {
+        sum += energies[i] - energies[i - width];
+        if sum < best.0 {
+            best = (sum, i + 1 - width);
+        }
+    }
+    let quietest = (best.1..best.1 + width)
+        .min_by(|&a, &b| energies[a].total_cmp(&energies[b]))
+        .unwrap_or(best.1);
+    start + quietest * frame + frame / 2
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,7 +251,7 @@ mod tests {
         audio.extend(vec![0.0005_f32; 32_000]); // 2 s quiet
         let (start, end) = speech_bounds(&audio).unwrap();
         assert!(start > 12_000 && start <= 16_000, "start = {start}");
-        assert!(end >= 32_000 && end < 40_000, "end = {end}");
+        assert!((32_000..40_000).contains(&end), "end = {end}");
     }
 
     #[test]
@@ -242,5 +282,34 @@ mod tests {
         let captured = prepare(&audio, 16_000);
         assert!(captured.has_speech);
         assert!(captured.samples.len() >= 16_000);
+    }
+
+    #[test]
+    fn quiet_split_finds_the_pause() {
+        let rate = 1_000;
+        // 2 s of "speech", a 100 ms pause at 2.40-2.50 s, then more speech.
+        let mut samples: Vec<f32> = (0..3_000).map(|i| ((i as f32) * 0.3).sin() * 0.5).collect();
+        for s in &mut samples[2_400..2_500] {
+            *s = 0.0;
+        }
+        let cut = quiet_split(&samples, rate, 1_000);
+        assert!((2_400..2_500).contains(&cut), "cut at {cut}");
+        assert_eq!(quiet_split(&[], rate, 1_000), 0);
+    }
+
+    #[test]
+    fn quiet_split_prefers_a_pause_over_a_silent_consonant() {
+        let rate = 16_000;
+        let speech = |n: usize| -> Vec<f32> { (0..n).map(|i| ((i as f32) * 0.2).sin() * 0.4).collect() };
+        // Speech, a 40 ms dead-silent stop consonant, speech, a 250 ms pause
+        // with a little room noise, then speech.
+        let mut samples = speech(16_000);
+        samples.extend(std::iter::repeat_n(0.0, 640));
+        samples.extend(speech(8_000));
+        let pause_start = samples.len();
+        samples.extend((0..4_000).map(|i| ((i as f32) * 1.3).sin() * 0.01));
+        samples.extend(speech(8_000));
+        let cut = quiet_split(&samples, rate, samples.len());
+        assert!((pause_start..pause_start + 4_000).contains(&cut), "cut at {cut}, pause at {pause_start}");
     }
 }

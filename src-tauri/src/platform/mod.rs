@@ -55,6 +55,11 @@ pub trait Desktop: Send + Sync {
     /// read the selection. Off for code editors, which copy the whole line when
     /// nothing is selected.
     fn selected_text(&self, target: Option<&AppTarget>, allow_copy_fallback: bool) -> Option<String>;
+    /// Full text of the focused field in `target` (for opt-in learning from edits).
+    /// None when it can't be read or is a password field.
+    fn field_text(&self, _target: &AppTarget) -> Option<String> {
+        None
+    }
 }
 
 pub struct NativeDesktop;
@@ -120,6 +125,10 @@ impl Desktop for NativeDesktop {
         clipboard::restore_now(saved);
         selection.filter(|t| !t.trim().is_empty())
     }
+
+    fn field_text(&self, target: &AppTarget) -> Option<String> {
+        native::field_text(target)
+    }
 }
 
 /// Start the global keyboard listener. `matcher` can be updated later (new
@@ -133,6 +142,7 @@ pub fn start_hotkeys(
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(specta::Type))]
 pub struct Permissions {
     /// Needed for the global shortcut, paste, and reading selected text.
     pub accessibility: bool,

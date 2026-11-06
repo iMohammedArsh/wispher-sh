@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
+use crate::audio::AudioRecorder;
 use crate::controller::Controller;
 use crate::input::{Binding, Matcher, Shortcut};
 use crate::llm::{LlmClient, Polisher};
@@ -13,6 +14,7 @@ use crate::ui::TauriUi;
 /// Everything the IPC commands need, managed by Tauri.
 pub struct AppState {
     pub controller: Controller,
+    pub recorder: Arc<AudioRecorder>,
     pub store: Arc<Store>,
     pub settings: Arc<SettingsStore>,
     pub ui: Arc<TauriUi>,
@@ -25,6 +27,11 @@ pub struct AppState {
 impl AppState {
     pub fn apply_shortcuts(&self, settings: &Settings) {
         self.matcher.lock().set_bindings(bindings(settings));
+    }
+
+    /// Open or close the always-on microphone to match the settings.
+    pub fn apply_microphone(&self, settings: &Settings) {
+        self.recorder.set_warm(settings.microphone.as_deref(), settings.keep_mic_warm);
     }
 
     pub fn warm_up(&self, model: &str) {

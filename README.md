@@ -7,7 +7,11 @@ Hams is a voice typer for macOS and Windows. Hold a shortcut in any app, speak, 
 - **Command mode.** Select text, hold the command shortcut, and say "make this more formal" or "translate to English".
 - **App-aware styles.** Writing is casual in chat apps, formal in email, and raw in code editors and terminals. You can edit each style's instructions and pin any app to a style.
 - **Live preview (optional).** Words appear in the overlay while you speak.
-- **Snippets, a personal dictionary that learns from your edits, voice commands** ("new line", "scratch that"), **Esc to cancel, and double-tap for hands-free.**
+- **Voice notes.** Record a lecture, meeting or walk-and-talk for as long as you like. Hams transcribes it in chunks while you talk, then saves the transcript with an AI title and key points.
+- **Snippets, a personal dictionary that learns from your edits** (in History, or opt-in in the app you pasted into)**, voice commands** ("new line", "scratch that"), **Esc to cancel, and double-tap for hands-free.**
+- **Rewrite from History.** Turn an old dictation into an email, a chat message or document prose with one click.
+- **Keep the mic ready (optional).** Recording starts instantly and includes the moment before you pressed the key.
+- **Automatic updates.** Signed updates from GitHub Releases, installed only when you click Install.
 - **Searchable history and local stats.** Everything is stored in one SQLite file. API keys live in the OS keychain.
 
 ## Installing on your Mac (the everyday way)
@@ -20,6 +24,10 @@ scripts/install-macos.sh             # build a release Hams.app and install it t
 The install script quits the running Hams, moves the old `/Applications/Hams.app` to the Trash, copies the new build in and opens it. Signing every build with the same local certificate makes macOS remember the Accessibility and Microphone permissions, so you don't have to grant them again after each update. Without the certificate the app is ad-hoc signed and still works, but you may have to re-enable Hams under Privacy & Security → Accessibility after reinstalling.
 
 Turn on **Settings → General → Open Hams at login** to start Hams quietly in the menu bar. Closing the window keeps Hams running in the menu bar, and opening it again just brings the window forward.
+
+## Publishing an update
+
+Bump the version in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `package.json`, commit, then run `scripts/release-macos.sh`. It builds a signed app, creates a draft GitHub Release with the update archive, `latest.json` and a DMG. Publish the draft and installed copies offer the update within a few hours (or right away from Settings → Updates → Check now). Updates are signed with `~/.tauri/hams.key`; keep a backup of it, because installs can't be updated without it.
 
 ## App icon
 

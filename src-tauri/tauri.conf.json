@@ -43,6 +43,15 @@
       "infoPlist": "Info.plist"
     },
     "category": "Productivity",
-    "shortDescription": "Voice typing that stays on your computer"
+    "shortDescription": "Voice typing that stays on your computer",
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlFRUMwMkYwNzNFQ0ZFMzQKUldRMC91eHo4QUxzbm5LbVc5OFZyVllqUThBU2dVNy9hSDB2WDFKbXM5aGVYclQ2TGxsUUJaVFcK",
+      "endpoints": [
+        "https://github.com/iMohammedArsh/wispher-sh/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

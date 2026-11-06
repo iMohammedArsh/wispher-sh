@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use parking_lot::Mutex;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState};
 
-use super::{models, sanitize, vocabulary_prompt, SttRequest, Transcriber};
+use super::{models, strip_stock_phrases, sanitize, vocabulary_prompt, SttRequest, Transcriber};
 use crate::error::{AppError, AppResult};
 
 struct Loaded {
@@ -86,7 +86,11 @@ impl Transcriber for WhisperEngine {
                 continue;
             }
             if let Ok(words) = segment.to_str_lossy() {
-                text.push_str(&words);
+                let kept = strip_stock_phrases(&words);
+                if kept.len() != words.len() {
+                    tracing::debug!("Dropped a likely hallucination from {words:?}");
+                }
+                text.push_str(&kept);
                 text.push(' ');
             }
         }
@@ -156,5 +160,51 @@ mod tests {
         println!("{:?} in {:?}", text, started.elapsed());
         let lower = text.to_lowercase();
         assert!(lower.contains("hello") && lower.contains("dictation"), "got {text:?}");
+    }
+
+    /// Notes mode end to end on real speech: stream a long recording into a
+    /// buffer, take ~30 s chunks at pauses like `AudioRecorder::drain`, and
+    /// check the joined chunks read like one pass over the whole recording.
+    /// Make a long WAV with `say -f some.txt -o /tmp/note.wav --data-format=LEI16@22050`,
+    /// then `HAMS_TEST_NOTE_WAV=/tmp/note.wav cargo test --release real_speech_note -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn real_speech_note_is_chunked_at_pauses() {
+        use crate::audio::dsp;
+        let path = std::env::var("HAMS_TEST_NOTE_WAV").expect("set HAMS_TEST_NOTE_WAV");
+        let (raw, rate) = read_wav(&path);
+        assert!(raw.len() > rate as usize * 45, "use a recording longer than 45 s");
+        let engine = WhisperEngine::new();
+        let request = SttRequest { language: "en".into(), model: "small".into(), vocabulary: vec![] };
+        let transcribe = |samples: &[f32]| {
+            let captured = dsp::prepare(samples, rate);
+            if captured.has_speech { engine.transcribe(&captured.samples, &request).unwrap() } else { String::new() }
+        };
+
+        // Arrives in 100 ms blocks; checked once a second, like the controller.
+        let (mut buffer, mut chunks) = (Vec::new(), Vec::new());
+        for (i, block) in raw.chunks(rate as usize / 10).enumerate() {
+            buffer.extend_from_slice(block);
+            if i % 10 == 9 {
+                if let Some(chunk) = dsp::take_chunk(&mut buffer, rate, 30) {
+                    println!("chunk {}: {:.1} s", chunks.len() + 1, chunk.len() as f32 / rate as f32);
+                    chunks.push(transcribe(&chunk));
+                }
+            }
+        }
+        chunks.push(transcribe(&buffer));
+        let chunked = chunks.join(" ");
+        let whole = transcribe(&raw);
+        println!("chunked: {chunked}\nwhole:   {whole}");
+
+        let words = |t: &str| -> Vec<String> {
+            t.split_whitespace().map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase()).filter(|w| !w.is_empty()).collect()
+        };
+        let (a, b) = (words(&chunked), words(&whole));
+        let found = a.iter().filter(|w| b.contains(w)).count();
+        let overlap = found as f32 / a.len().max(b.len()) as f32;
+        println!("{} chunks, {} vs {} words, overlap {:.0}%", chunks.len(), a.len(), b.len(), overlap * 100.0);
+        assert!(chunks.len() >= 2, "expected the recording to be split");
+        assert!(overlap > 0.97, "chunked transcript drifted from the single pass");
     }
 }

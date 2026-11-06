@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, type AppRule, type StyleId, type StyleInfo, type StyleOverride } from "../lib/ipc";
   import { app } from "../lib/state.svelte";
+  import Icon from "../components/Icon.svelte";
 
   const MAX_PROMPT = 1500;
 
@@ -82,102 +83,111 @@
   }
 </script>
 
-<div class="stack page">
-  <div class="spread">
+<div class="page">
+  <header class="title-row">
     <div>
       <h1>Styles</h1>
-      <p class="muted">Hams adapts how it writes to the app you're typing in. Edit any style to make it yours.</p>
+      <p class="sub">Hams writes casually in chat, formally in email and leaves code alone. Edit any style to make it yours.</p>
     </div>
     {#if s}
       <label class="row toggle">
-        <input type="checkbox" checked={s.app_styles} onchange={(e) => app.save({ app_styles: e.currentTarget.checked })} />
-        App-aware styles
+        <input class="switch" type="checkbox" checked={s.app_styles} onchange={(e) => app.save({ app_styles: e.currentTarget.checked })} />
+        Match the app
       </label>
     {/if}
-  </div>
+  </header>
 
   {#if s?.ai.provider === "off"}
-    <div class="banner warn">
-      <span class="grow">Style prompts shape the AI polish. Turn on an AI provider to use them; without one Hams still tidies messaging punctuation.</span>
+    <div class="notice">
+      <span class="grow">These instructions shape the AI polish, which is off. Without it Hams still tidies messaging punctuation and leaves code untouched.</span>
       <button onclick={() => (app.route = "settings")}>Set up AI</button>
     </div>
   {/if}
 
-  <div class="grid" class:off={!s?.app_styles}>
+  <div class:off={!s?.app_styles}>
     {#each styles as style (style.id)}
-      <article class="card stack">
-        <div class="spread">
-          <h2>{style.label}</h2>
-          {#if isEdited(style)}
-            <button class="ghost small" onclick={() => reset(style)}>Reset</button>
-          {/if}
+      <section class="setting" aria-labelledby="style-{style.id}">
+        <header>
+          <h2 id="style-{style.id}">{style.label}</h2>
+          <p>{examples[style.id]}</p>
+        </header>
+        <div class="stack">
+          <textarea
+            rows={Math.min(6, Math.max(3, Math.ceil(promptOf(style).length / 64)))}
+            maxlength={MAX_PROMPT}
+            value={promptOf(style)}
+            placeholder={style.prompt}
+            aria-label="{style.label} style instructions"
+            oninput={(e) => (drafts[style.id] = e.currentTarget.value)}
+            onblur={() => commitPrompt(style)}
+          ></textarea>
+          <div class="spread">
+            <label class="row small">
+              <input class="switch" type="checkbox" checked={polishOf(style)} onchange={(e) => setOverride(style, { polish: e.currentTarget.checked })} />
+              <span>Polish with AI{#if !style.polish}<span class="muted">&nbsp;· off by default, AI rewrites can break commands</span>{/if}</span>
+            </label>
+            {#if isEdited(style)}
+              <button class="ghost small" onclick={() => reset(style)}>Reset to default</button>
+            {:else}
+              <span class="small muted">Default</span>
+            {/if}
+          </div>
         </div>
-        <p class="small muted">{examples[style.id]}</p>
-        <textarea
-          rows="4"
-          maxlength={MAX_PROMPT}
-          value={promptOf(style)}
-          placeholder={style.prompt}
-          aria-label="{style.label} style instructions"
-          oninput={(e) => (drafts[style.id] = e.currentTarget.value)}
-          onblur={() => commitPrompt(style)}
-        ></textarea>
-        <label class="check small">
-          <input type="checkbox" checked={polishOf(style)} onchange={(e) => setOverride(style, { polish: e.currentTarget.checked })} />
-          Polish with AI {#if !style.polish}<span class="muted">(off by default: AI rewrites can break commands)</span>{/if}
-        </label>
-      </article>
+      </section>
     {/each}
+
+    <section class="setting" aria-labelledby="rules-title">
+      <header>
+        <h2 id="rules-title">App rules</h2>
+        <p>Pin an app to a style. Rules win over automatic detection. Use the app's name as it appears in History, or its bundle id, such as <code>com.google.Chrome</code>.</p>
+      </header>
+      <div class="stack">
+        {#if rules.length}
+          <ul class="panel flush rows">
+            {#each rules as rule, index (rule.app)}
+              <li class="rule">
+                <span class="grow">{rule.app}</span>
+                <select value={rule.style} onchange={(e) => setRuleStyle(index, e.currentTarget.value as StyleId)} aria-label="Style for {rule.app}">
+                  {#each styles as style (style.id)}<option value={style.id}>{style.label}</option>{/each}
+                </select>
+                <button class="ghost small" onclick={() => removeRule(index)} aria-label="Remove rule for {rule.app}" title="Remove"><Icon name="trash" size={15} /></button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+
+        <form class="rule" onsubmit={(e) => { e.preventDefault(); addRule(); }}>
+          <input type="text" class="grow" list="recent-apps" placeholder="App name or bundle id" bind:value={newRule.app} aria-label="App" />
+          <datalist id="recent-apps">
+            {#each unruledApps as name (name)}<option value={name}></option>{/each}
+          </datalist>
+          <select bind:value={newRule.style} aria-label="Style for the new rule">
+            {#each styles as style (style.id)}<option value={style.id}>{style.label}</option>{/each}
+          </select>
+          <button class="primary" type="submit" disabled={!newRule.app.trim()}><Icon name="plus" />Add rule</button>
+        </form>
+
+        {#if unruledApps.length}
+          <div class="chips">
+            <span class="small muted">You dictate into</span>
+            {#each unruledApps.slice(0, 8) as name (name)}
+              <button class="small chip" onclick={() => (newRule.app = name)}>{name}</button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    </section>
   </div>
-
-  <section class="card stack" class:off={!s?.app_styles}>
-    <div>
-      <h2>App rules</h2>
-      <p class="small muted">Pin an app to a style. Rules win over automatic detection. Use the app's name as shown in History, or its bundle id (for example <code>com.google.Chrome</code>).</p>
-    </div>
-
-    {#each rules as rule, index (rule.app)}
-      <div class="rule">
-        <span class="grow">{rule.app}</span>
-        <select value={rule.style} onchange={(e) => setRuleStyle(index, e.currentTarget.value as StyleId)} aria-label="Style for {rule.app}">
-          {#each styles as style (style.id)}<option value={style.id}>{style.label}</option>{/each}
-        </select>
-        <button class="ghost danger" onclick={() => removeRule(index)} aria-label="Remove rule for {rule.app}">Remove</button>
-      </div>
-    {/each}
-
-    <form class="rule" onsubmit={(e) => { e.preventDefault(); addRule(); }}>
-      <input type="text" class="grow" list="recent-apps" placeholder="App name or bundle id" bind:value={newRule.app} />
-      <datalist id="recent-apps">
-        {#each unruledApps as name (name)}<option value={name}></option>{/each}
-      </datalist>
-      <select bind:value={newRule.style} aria-label="Style for the new rule">
-        {#each styles as style (style.id)}<option value={style.id}>{style.label}</option>{/each}
-      </select>
-      <button class="primary" type="submit" disabled={!newRule.app.trim()}>Add rule</button>
-    </form>
-
-    {#if unruledApps.length}
-      <div class="chips">
-        <span class="small muted">Recent:</span>
-        {#each unruledApps.slice(0, 8) as name (name)}
-          <button class="chip small" onclick={() => (newRule.app = name)}>{name}</button>
-        {/each}
-      </div>
-    {/if}
-  </section>
 </div>
 
 <style>
-  .page { max-width: 900px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
-  .off { opacity: 0.55; }
-  article { gap: 8px; }
-  textarea { width: 100%; resize: vertical; font: inherit; font-size: 13px; line-height: 1.45; }
-  .toggle { gap: 6px; font-weight: 500; }
+  .off { opacity: 0.6; }
+  .toggle { gap: 8px; font-weight: 500; flex: none; margin-top: 4px; }
+  textarea { font-size: 13.5px; }
   .rule { display: flex; align-items: center; gap: 8px; }
-  .rule select { min-width: 150px; }
+  .rows .rule { padding-top: 8px; padding-bottom: 8px; }
+  .rule select { width: 170px; flex: none; }
   .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-  .chip { padding: 2px 10px; border-radius: 999px; }
-  code { font-size: 12px; }
+  .chip { border-radius: 999px; }
+  code { font-size: 12px; background: var(--raised); padding: 1px 4px; border-radius: 4px; }
 </style>

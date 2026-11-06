@@ -1,5 +1,5 @@
 // One app-wide store, fed by Rust events. Components read it directly.
-import { api, errorText, on, type Settings, type SettingsView, type Status } from "./ipc";
+import { api, errorText, on, type Settings, type SettingsView, type Status, type UpdateInfo, type UpdateProgress } from "./ipc";
 
 const idle: Status = {
   phase: "idle",
@@ -12,7 +12,7 @@ const idle: Status = {
   preview: false,
 };
 
-export type Route = "home" | "history" | "dictionary" | "snippets" | "styles" | "settings";
+export type Route = "home" | "history" | "notes" | "dictionary" | "snippets" | "styles" | "settings";
 
 class AppStore {
   status = $state<Status>(idle);
@@ -21,6 +21,10 @@ class AppStore {
   /** Bumped whenever history, stats or the dictionary change on disk. */
   dataVersion = $state(0);
   toast = $state<{ text: string; kind: "ok" | "error" } | null>(null);
+  /** A newer Hams, found by the background check or "Check now". */
+  update = $state<UpdateInfo | null>(null);
+  /** Download progress while an update installs, 0..1 (null when the size is unknown). */
+  updateProgress = $state<number | null | undefined>(undefined);
   #toastTimer: ReturnType<typeof setTimeout> | undefined;
 
   get settings(): Settings | null {
@@ -34,6 +38,8 @@ class AppStore {
   async init() {
     await on<Status>("status", (s) => (this.status = s));
     await on("data-changed", () => this.dataVersion++);
+    await on<UpdateInfo>("update-available", (u) => (this.update = u));
+    await on<UpdateProgress>("update-progress", (p) => (this.updateProgress = p.total ? p.downloaded / p.total : null));
     try {
       this.view = await api.getSettings();
       this.status = await api.getStatus();
@@ -57,6 +63,17 @@ class AppStore {
     } catch (error) {
       this.notify(errorText(error), "error");
       return false;
+    }
+  }
+
+  /** Download, verify and install the update; Hams restarts when it's done. */
+  async installUpdate() {
+    this.updateProgress = 0;
+    try {
+      await api.updateInstall();
+    } catch (error) {
+      this.updateProgress = undefined;
+      this.notify(errorText(error), "error");
     }
   }
 

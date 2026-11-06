@@ -19,6 +19,7 @@ const LEGACY_KEYCHAIN_SERVICE: &str = "com.mohammedarsh.hams";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(specta::Type))]
 pub enum DeliveryMode {
     /// Paste, then put the user's previous clipboard back.
     #[default]
@@ -31,6 +32,7 @@ pub enum DeliveryMode {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(specta::Type))]
 pub enum AiProvider {
     #[default]
     Off,
@@ -66,6 +68,7 @@ impl AiProvider {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
+#[cfg_attr(test, derive(specta::Type))]
 pub struct AiSettings {
     pub provider: AiProvider,
     /// Empty means the provider's recommended fast model.
@@ -91,6 +94,7 @@ impl Default for AiSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
+#[cfg_attr(test, derive(specta::Type))]
 pub struct Settings {
     pub dictate_shortcut: String,
     pub command_shortcut: String,
@@ -100,6 +104,9 @@ pub struct Settings {
     pub double_tap_lock: bool,
     /// None = system default input.
     pub microphone: Option<String>,
+    /// Keep the microphone open between dictations: instant start, and the
+    /// moment just before the key press is included.
+    pub keep_mic_warm: bool,
     /// "auto", or a Whisper language code such as "en" or "ml".
     pub language: String,
     /// Model id from the catalog in `stt::models`.
@@ -115,7 +122,11 @@ pub struct Settings {
     /// Apps pinned to a style, checked before automatic detection.
     pub app_rules: Vec<AppRule>,
     pub learn_from_edits: bool,
+    /// Opt-in: re-read the field Hams pasted into and learn from corrections made there.
+    pub learn_from_fields: bool,
     pub ai: AiSettings,
+    /// Look for a new version of Hams every few hours.
+    pub check_updates: bool,
     pub onboarding_done: bool,
 }
 
@@ -128,6 +139,7 @@ impl Default for Settings {
             paste_last_shortcut: if mac { "Meta+Alt+Shift+V" } else { "Ctrl+Alt+Shift+V" }.into(),
             double_tap_lock: true,
             microphone: None,
+            keep_mic_warm: false,
             language: "auto".into(),
             model: "small".into(),
             delivery: DeliveryMode::PasteRestore,
@@ -138,7 +150,9 @@ impl Default for Settings {
             style_overrides: BTreeMap::new(),
             app_rules: Vec::new(),
             learn_from_edits: true,
+            learn_from_fields: false,
             ai: AiSettings::default(),
+            check_updates: true,
             onboarding_done: false,
         }
     }

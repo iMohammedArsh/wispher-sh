@@ -36,6 +36,10 @@ impl Ui for TauriUi {
         let _ = self.app.emit_to(overlay::LABEL, "partial", text);
     }
 
+    fn note_progress(&self, text: &str) {
+        let _ = self.app.emit_to("main", "note-progress", text);
+    }
+
     fn data_changed(&self) {
         let _ = self.app.emit("data-changed", ());
     }

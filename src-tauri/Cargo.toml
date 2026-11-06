@@ -39,6 +39,7 @@ regex = "1"
 whisper-rs = { version = "0.15", optional = true }
 tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.15", optional = true, features = ["metal"] }
@@ -58,6 +59,10 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [dev-dependencies]
+specta = { version = "=2.0.0-rc.28", features = ["derive"] }
+specta-serde = "=0.0.15"
+specta-typescript = "=0.0.15"
+specta-util = "=0.0.15"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "test-util"] }
 
 [profile.release]

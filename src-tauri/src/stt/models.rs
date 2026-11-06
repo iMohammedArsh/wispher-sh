@@ -10,6 +10,7 @@ use tokio::io::AsyncWriteExt;
 use crate::error::{AppError, AppResult};
 
 #[derive(Debug, Clone, Copy, Serialize)]
+#[cfg_attr(test, derive(specta::Type))]
 pub struct ModelInfo {
     pub id: &'static str,
     pub file: &'static str,
@@ -61,6 +62,7 @@ pub fn is_installed(id: &str) -> bool {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(specta::Type))]
 pub struct ModelStatus {
     #[serde(flatten)]
     pub info: ModelInfo,

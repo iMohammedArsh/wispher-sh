@@ -12,16 +12,25 @@ use crate::llm::styles::Style;
 use crate::llm::{self, LlmClient, Polisher, Task};
 use crate::settings::{self, AiProvider, Settings};
 use crate::state::AppState;
-use crate::store::{DictionaryEntry, HistoryItem, Snippet, Stats, Suggestion};
+use crate::store::{DictionaryEntry, HistoryItem, Note, Snippet, Stats, Suggestion};
 use crate::stt::models::{self, ModelStatus};
 use crate::{platform, text};
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(specta::Type))]
 pub struct SettingsView {
     settings: Settings,
     has_api_key: bool,
-    platform: &'static str,
+    platform: Platform,
     hotkey_error: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+#[cfg_attr(test, derive(specta::Type))]
+pub enum Platform {
+    Macos,
+    Windows,
 }
 
 #[tauri::command]
@@ -31,16 +40,21 @@ pub fn get_settings(state: State<AppState>) -> SettingsView {
     SettingsView {
         settings,
         has_api_key,
-        platform: if cfg!(target_os = "macos") { "macos" } else { "windows" },
+        platform: if cfg!(target_os = "macos") { Platform::Macos } else { Platform::Windows },
         hotkey_error: state.hotkey_error.lock().clone(),
     }
 }
 
 #[tauri::command]
 pub fn save_settings(state: State<AppState>, settings: Settings) -> AppResult<()> {
-    let model_changed = state.settings.get().model != settings.model;
+    let previous = state.settings.get();
+    let model_changed = previous.model != settings.model;
+    let mic_changed = previous.keep_mic_warm != settings.keep_mic_warm || previous.microphone != settings.microphone;
     state.settings.save(settings.clone())?;
     state.apply_shortcuts(&settings);
+    if mic_changed {
+        state.apply_microphone(&settings);
+    }
     if model_changed {
         state.warm_up(&settings.model);
     }
@@ -64,6 +78,31 @@ pub fn dictation_toggle(state: State<AppState>) {
     state.controller.send(Input::Toggle);
 }
 
+/// Start a voice note, or finish the one being recorded.
+#[tauri::command]
+pub fn note_toggle(state: State<AppState>) {
+    state.controller.send(Input::Note);
+}
+
+#[tauri::command]
+pub fn notes(state: State<'_, AppState>, query: Option<String>) -> AppResult<Vec<Note>> {
+    state.store.notes(query.as_deref().unwrap_or(""))
+}
+
+#[tauri::command]
+pub fn note_rename(app: AppHandle, state: State<'_, AppState>, id: i64, title: String) -> AppResult<()> {
+    state.store.rename_note(id, &title)?;
+    let _ = app.emit("data-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn note_delete(app: AppHandle, state: State<'_, AppState>, id: i64) -> AppResult<()> {
+    state.store.delete_note(id)?;
+    let _ = app.emit("data-changed", ());
+    Ok(())
+}
+
 #[tauri::command]
 pub fn dictation_stop(state: State<AppState>) {
     state.controller.send(Input::Stop);
@@ -85,7 +124,8 @@ pub fn list_models() -> Vec<ModelStatus> {
 }
 
 #[derive(Clone, Serialize)]
-struct Progress<'a> {
+#[cfg_attr(test, derive(specta::Type))]
+pub struct ModelProgress<'a> {
     id: &'a str,
     progress: f32,
 }
@@ -94,7 +134,7 @@ struct Progress<'a> {
 pub async fn download_model(app: AppHandle, state: State<'_, AppState>, id: String) -> AppResult<()> {
     let emit_id = id.clone();
     models::download(&id, |progress| {
-        let _ = app.emit("model-progress", Progress { id: &emit_id, progress });
+        let _ = app.emit("model-progress", ModelProgress { id: &emit_id, progress });
     })
     .await?;
     if state.settings.get().model == id {
@@ -126,6 +166,25 @@ pub fn history_update(state: State<AppState>, id: i64, text: String) -> AppResul
         }
     }
     Ok(learned)
+}
+
+#[derive(Serialize)]
+#[cfg_attr(test, derive(specta::Type))]
+pub struct RestyleResult {
+    text: String,
+    polished: bool,
+}
+
+/// Rewrite a History item in another style and save it in place.
+#[tauri::command]
+pub async fn history_restyle(state: State<'_, AppState>, id: i64, style: Style) -> AppResult<RestyleResult> {
+    let source = state.store.history_source(id)?.ok_or_else(|| AppError::Other("that dictation is gone".into()))?;
+    let settings = state.settings.get();
+    let dictionary = state.store.dictionary()?;
+    let polisher = state.polisher_for(&settings);
+    let restyled = crate::controller::restyle(&source, style, &settings, &dictionary, polisher.as_ref()).await?;
+    state.store.restyle_history(id, &restyled.text, style.id())?;
+    Ok(RestyleResult { text: restyled.text, polished: restyled.polished })
 }
 
 #[tauri::command]
@@ -210,8 +269,9 @@ pub fn open_permission_settings(kind: String) {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(specta::Type))]
 pub struct StyleInfo {
-    id: &'static str,
+    id: Style,
     label: &'static str,
     prompt: &'static str,
     polish: bool,
@@ -221,7 +281,7 @@ pub struct StyleInfo {
 pub fn styles() -> Vec<StyleInfo> {
     Style::ALL
         .iter()
-        .map(|s| StyleInfo { id: s.id(), label: s.label(), prompt: s.default_prompt(), polish: s.polish_by_default() })
+        .map(|s| StyleInfo { id: *s, label: s.label(), prompt: s.default_prompt(), polish: s.polish_by_default() })
         .collect()
 }
 
@@ -263,4 +323,20 @@ pub fn set_autostart(app: AppHandle, enabled: bool) -> AppResult<()> {
     use tauri_plugin_autostart::ManagerExt;
     let manager = app.autolaunch();
     if enabled { manager.enable() } else { manager.disable() }.map_err(|e| AppError::Settings(e.to_string()))
+}
+
+#[tauri::command]
+pub fn app_version(app: AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+#[tauri::command]
+pub async fn update_check(app: AppHandle) -> AppResult<Option<crate::updater::UpdateInfo>> {
+    crate::updater::check(&app).await
+}
+
+/// Downloads, verifies and installs the update found by the last check, then restarts Hams.
+#[tauri::command]
+pub async fn update_install(app: AppHandle) -> AppResult<()> {
+    crate::updater::install(&app).await
 }

@@ -27,6 +27,7 @@ extern "C" {
     fn AXIsProcessTrusted() -> bool;
     fn AXIsProcessTrustedWithOptions(options: *const c_void) -> bool;
     fn AXUIElementCreateSystemWide() -> AXUIElementRef;
+    fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef;
     fn AXUIElementCopyAttributeValue(element: AXUIElementRef, attribute: CFStringRef, value: *mut CFTypeRef) -> i32;
 }
 
@@ -111,6 +112,47 @@ pub fn open_permission_settings(kind: &str) {
     };
     let url = format!("x-apple.systempreferences:com.apple.preference.security?{anchor}");
     let _ = std::process::Command::new("open").arg(url).spawn();
+}
+
+/// Copy a string attribute of an element; None when it's missing or not a string.
+unsafe fn string_attribute(element: AXUIElementRef, name: &'static str) -> Option<String> {
+    let mut value: CFTypeRef = std::ptr::null();
+    let attribute = CFString::from_static_string(name);
+    if AXUIElementCopyAttributeValue(element, attribute.as_concrete_TypeRef(), &mut value) != 0 || value.is_null() {
+        return None;
+    }
+    CFType::wrap_under_create_rule(value).downcast::<CFString>().map(|s| s.to_string())
+}
+
+/// Largest field Hams will read back for learning (characters).
+const MAX_FIELD_CHARS: usize = 20_000;
+
+/// The text of the focused field in the target app, through Accessibility.
+/// Password fields are never read.
+pub fn field_text(target: &AppTarget) -> Option<String> {
+    if target.pid <= 0 || !can_send_keys() {
+        return None;
+    }
+    unsafe {
+        let app = AXUIElementCreateApplication(target.pid as i32);
+        if app.is_null() {
+            return None;
+        }
+        let mut focused: CFTypeRef = std::ptr::null();
+        let focused_attr = CFString::from_static_string("AXFocusedUIElement");
+        let status = AXUIElementCopyAttributeValue(app, focused_attr.as_concrete_TypeRef(), &mut focused);
+        CFRelease(app as CFTypeRef);
+        if status != 0 || focused.is_null() {
+            return None;
+        }
+        let secure = [string_attribute(focused, "AXRole"), string_attribute(focused, "AXSubrole")]
+            .iter()
+            .flatten()
+            .any(|r| r == "AXSecureTextField");
+        let value = if secure { None } else { string_attribute(focused, "AXValue") };
+        CFRelease(focused);
+        value.filter(|v| v.chars().count() <= MAX_FIELD_CHARS)
+    }
 }
 
 /// Read the focused element's selected text through the Accessibility API.

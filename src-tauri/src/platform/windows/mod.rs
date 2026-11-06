@@ -149,6 +149,11 @@ pub fn open_permission_settings(kind: &str) {
     let _ = std::process::Command::new("cmd").args(["/C", "start", "", uri]).spawn();
 }
 
+/// Reading a field back needs UI Automation, which isn't wired up yet.
+pub fn field_text(_target: &AppTarget) -> Option<String> {
+    None
+}
+
 /// UI Automation support is planned; until then command mode uses the Ctrl+C probe.
 pub fn selected_text_accessibility() -> Option<String> {
     None

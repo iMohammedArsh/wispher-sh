@@ -35,6 +35,50 @@ const HALLUCINATIONS: &[&str] = &[
     "subtitles by the amara.org community",
 ];
 
+/// Phrases from video subtitles that Whisper invents on silence (often at the
+/// edge of a voice-note chunk). Nobody dictates these, so a segment that is
+/// only one of them is dropped wherever it appears. Short phrases like
+/// "Thank you." are real dictation and only dropped when they're everything.
+const STOCK_PHRASES: &[&str] = &[
+    "thanks for watching",
+    "thank you for watching",
+    "thank you so much for watching",
+    "thanks for watching and see you next time",
+    "please subscribe",
+    "please like and subscribe",
+    "don't forget to like and subscribe",
+    "see you in the next video",
+    "subtitles by the amara.org community",
+];
+
+/// Remove sentences that are only a stock subtitle phrase from a Whisper segment.
+pub fn strip_stock_phrases(segment: &str) -> String {
+    let mut out = String::with_capacity(segment.len());
+    let mut sentence = String::new();
+    let mut chars = segment.chars().peekable();
+    while let Some(c) = chars.next() {
+        sentence.push(c);
+        let ends = matches!(c, '.' | '!' | '?') && chars.peek().is_none_or(|n| n.is_whitespace());
+        if ends || chars.peek().is_none() {
+            if !is_stock_phrase(&sentence) {
+                out.push_str(&sentence);
+            }
+            sentence.clear();
+        }
+    }
+    out
+}
+
+/// Is this sentence only a stock subtitle phrase?
+fn is_stock_phrase(segment: &str) -> bool {
+    let normalized = segment
+        .trim()
+        .trim_matches(|c: char| c.is_ascii_punctuation() || c.is_whitespace())
+        .to_lowercase()
+        .replace(['!', '.', ','], "");
+    !normalized.is_empty() && STOCK_PHRASES.iter().any(|p| p.replace(['.', ','], "") == normalized)
+}
+
 /// Strip whisper.cpp annotations ("[BLANK_AUDIO]", "(music)", "*laughs*") and
 /// collapse whitespace. Ported from Hams v1 `sanitize_transcript`.
 pub fn sanitize(text: &str) -> String {
@@ -85,6 +129,15 @@ pub fn vocabulary_prompt(vocabulary: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stock_subtitle_phrases_are_dropped_but_real_thanks_stay() {
+        assert_eq!(strip_stock_phrases(" colleagues quickly. Thank you for watching."), " colleagues quickly.");
+        assert_eq!(strip_stock_phrases(" Thanks for watching!"), "");
+        assert_eq!(strip_stock_phrases(" Please like and subscribe. So we will add it."), " So we will add it.");
+        assert_eq!(strip_stock_phrases(" Thank you. See you Monday."), " Thank you. See you Monday.");
+        assert_eq!(strip_stock_phrases(" version 2.0 is out"), " version 2.0 is out");
+    }
 
     #[test]
     fn sanitize_strips_annotations() {

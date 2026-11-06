@@ -32,3 +32,6 @@ w3_debug.png
 *.njsproj
 *.sln
 *.sw?
+
+# Design tool working files
+.taste-skill/

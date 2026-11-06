@@ -17,9 +17,20 @@ if [[ -z "${APPLE_SIGNING_IDENTITY:-}" ]] && security find-identity -v -p codesi
 fi
 echo "==> Signing with: ${APPLE_SIGNING_IDENTITY:-ad-hoc}"
 
+# Update signing: builds signed with ~/.tauri/hams.key can be offered as updates.
+# Without the key, build without the update archive instead of failing.
+UPDATE_KEY="${HAMS_UPDATE_KEY:-$HOME/.tauri/hams.key}"
+build_args=(--bundles app)
+if [[ -f "$UPDATE_KEY" ]]; then
+  export TAURI_SIGNING_PRIVATE_KEY="$(cat "$UPDATE_KEY")"
+  export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
+else
+  build_args+=(--config '{"bundle":{"createUpdaterArtifacts":false}}')
+fi
+
 echo "==> Building release app (first build takes a few minutes)…"
 npm ci --silent
-npm run tauri build -- --bundles app
+npm run tauri build -- "${build_args[@]}"
 
 app="src-tauri/target/release/bundle/macos/Hams.app"
 [[ -d "$app" ]] || { echo "Build output not found at $app" >&2; exit 1; }

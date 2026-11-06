@@ -2,6 +2,7 @@
   import { api, errorText, on, type ModelStatus, type Permissions } from "../lib/ipc";
   import { app } from "../lib/state.svelte";
   import { shortcutLabel } from "../lib/format";
+  import Mark from "../components/Mark.svelte";
 
   let step = $state(0);
   let permissions = $state<Permissions | null>(null);
@@ -44,15 +45,16 @@
 </script>
 
 <div class="wrap">
-  <ol class="steps">
+  <div class="brand"><Mark size={22} /><span>Hams</span></div>
+  <ol class="steps" aria-label="Setup steps">
     {#each steps as name, i}
-      <li class:done={i < step} class:active={i === step}>{name}</li>
+      <li class:done={i < step} class:active={i === step} aria-current={i === step ? "step" : undefined}>{name}</li>
     {/each}
   </ol>
 
-  <section class="card stack panel">
+  <section class="panel stack">
     {#if current === "Welcome"}
-      <h1>Type at the speed of speech</h1>
+      <h1>Write at the speed you talk</h1>
       <p>Hold a shortcut in any app, talk naturally, let go. Hams writes clean text right where your cursor is.</p>
       <ul class="small muted">
         <li>Speech recognition runs on this computer, so it works offline and stays private.</li>
@@ -135,17 +137,21 @@
 </div>
 
 <style>
-  .wrap { max-width: 560px; margin: 24px auto; display: flex; flex-direction: column; gap: 16px; }
-  .steps { display: flex; gap: 6px; list-style: none; padding: 0; margin: 0; }
-  .steps li { flex: 1; font-size: 12px; color: var(--muted); border-top: 3px solid var(--border); padding-top: 6px; }
-  .steps li.done, .steps li.active { border-color: var(--accent); }
-  .steps li.active { color: var(--text); font-weight: 600; }
-  .panel { padding: 24px; gap: 14px; }
-  ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
-  .perm { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
-  .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
-  .try { min-height: 72px; border: 1px dashed var(--border); border-radius: 8px; padding: 14px; display: grid; place-items: center; text-align: center; }
-  .try.live { border-color: #e5484d; color: #e5484d; }
-  .error { color: var(--danger); }
-  progress { width: 140px; accent-color: var(--accent); }
+  .wrap { max-width: 560px; margin: 8px auto 0; display: flex; flex-direction: column; gap: 18px; }
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 16px; }
+  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 6px; list-style: none; padding: 0; margin: 0; }
+  .steps li { font-size: 12px; color: var(--muted); padding-top: 8px; position: relative; }
+  .steps li::before { content: ""; position: absolute; inset: 0 0 auto; height: 3px; border-radius: 2px; background: var(--rule); }
+  .steps li.done::before, .steps li.active::before { background: var(--data); }
+  .steps li.active { color: var(--text); font-weight: 500; }
+  .panel { padding: 28px; gap: 16px; }
+  .panel :global(h1) { font-size: 22px; }
+  ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+  li::marker { color: var(--data); }
+  .perm { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--raised); border-radius: var(--radius-card); }
+  .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+  .try { min-height: 84px; border: 1px dashed var(--control); border-radius: var(--radius-card); padding: 16px; display: grid; place-items: center; text-align: center; font-size: 15px; }
+  .try.live { border-color: var(--live); color: var(--live); }
+  .error { color: var(--negative); }
+  progress { width: 140px; }
 </style>

@@ -32,6 +32,16 @@ const DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(350);
 /// Live preview: how often the recent audio is re-transcribed, and how much of it.
 const PREVIEW_EVERY: Duration = Duration::from_millis(1_000);
 const PREVIEW_WINDOW_SECONDS: u32 = 20;
+/// Notes mode: transcribe the recording in chunks of about this length while it runs.
+const NOTE_CHUNK_SECONDS: u32 = 30;
+const NOTE_POLL: Duration = Duration::from_millis(1_000);
+/// Shorter notes aren't worth an AI summary.
+const NOTE_SUMMARY_MIN_WORDS: i64 = 30;
+/// Learning from fields: wait for the paste to land, then re-read the field
+/// every few seconds until the text has settled after an edit (or give up).
+const FIELD_SETTLE: Duration = Duration::from_millis(700);
+const FIELD_CHECK_EVERY: Duration = Duration::from_secs(5);
+const FIELD_CHECKS: u32 = 12;
 
 // ---- seams -------------------------------------------------------------------
 
@@ -42,6 +52,10 @@ pub trait Recorder: Send + Sync {
     fn level(&self) -> f32;
     /// Whisper-ready copy of the most recent audio while still recording (live preview).
     fn snapshot(&self) -> Option<Captured> {
+        None
+    }
+    /// Notes mode: take the buffered audio once at least `min_seconds` are in, and keep recording.
+    fn drain(&self, _min_seconds: u32) -> Option<Captured> {
         None
     }
 }
@@ -62,6 +76,9 @@ impl Recorder for crate::audio::AudioRecorder {
     fn snapshot(&self) -> Option<Captured> {
         Some(crate::audio::AudioRecorder::snapshot(self, PREVIEW_WINDOW_SECONDS))
     }
+    fn drain(&self, min_seconds: u32) -> Option<Captured> {
+        crate::audio::AudioRecorder::drain(self, min_seconds)
+    }
 }
 
 /// Where status updates go (the overlay and main window in the real app).
@@ -70,6 +87,8 @@ pub trait Ui: Send + Sync {
     fn level(&self, level: f32);
     /// Live preview text while recording.
     fn partial(&self, _text: &str) {}
+    /// Notes mode: the transcript so far, for the Notes screen.
+    fn note_progress(&self, _text: &str) {}
     /// History, stats or the dictionary changed on disk.
     fn data_changed(&self) {}
 }
@@ -95,6 +114,7 @@ pub struct Deps {
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(specta::Type))]
 pub enum Phase {
     #[default]
     Idle,
@@ -108,13 +128,17 @@ pub enum Phase {
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(specta::Type))]
 pub enum Kind {
     #[default]
     Dictate,
     Command,
+    /// A long voice note: transcribed in chunks, summarised, saved to Notes, never pasted.
+    Note,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Default)]
+#[cfg_attr(test, derive(specta::Type))]
 pub struct Status {
     pub phase: Phase,
     pub kind: Kind,
@@ -140,6 +164,8 @@ pub enum Input {
     Stop,
     /// Cancel button in the overlay.
     Cancel,
+    /// Start a voice note, or finish the one being recorded.
+    Note,
     PasteLast,
     TapExpired(u64),
     Finished(u64),
@@ -186,6 +212,13 @@ struct Recording {
     started_at: i64,
     meter: JoinHandle<()>,
     preview: Option<JoinHandle<()>>,
+    note: Option<NoteTask>,
+}
+
+/// The background chunk transcriber of a voice note.
+struct NoteTask {
+    stop: tokio::sync::watch::Sender<bool>,
+    chunks: JoinHandle<Vec<String>>,
 }
 
 impl Recording {
@@ -194,6 +227,9 @@ impl Recording {
         self.meter.abort();
         if let Some(preview) = &self.preview {
             preview.abort();
+        }
+        if let Some(note) = &self.note {
+            note.chunks.abort();
         }
     }
 }
@@ -228,7 +264,18 @@ impl Actor {
             }
             Input::Hotkey(HotkeyAction::Pressed(Binding::PasteLast)) | Input::PasteLast => self.paste_last(),
             Input::Hotkey(HotkeyAction::Released(Binding::PasteLast)) => {}
-            Input::Hotkey(HotkeyAction::Escape) | Input::Cancel => self.cancel(),
+            // Escape never throws away a voice note; only its Discard button does.
+            Input::Hotkey(HotkeyAction::Escape) => {
+                if !matches!(&self.state, State::Recording(r) if r.kind == Kind::Note) {
+                    self.cancel()
+                }
+            }
+            Input::Cancel => self.cancel(),
+            Input::Note => match &self.state {
+                State::Idle => self.start(Kind::Note, Binding::Dictate, Mode::Locked).await,
+                State::Recording(r) if r.kind == Kind::Note => self.finish(),
+                _ => {}
+            },
             Input::Hotkey(HotkeyAction::Interrupted(binding)) => {
                 if matches!(&self.state, State::Recording(r) if r.binding == binding && r.mode == Mode::Hold) {
                     self.cancel();
@@ -264,6 +311,8 @@ impl Actor {
                 self.start(kind, binding, Mode::Hold).await;
                 false
             }
+            // The mic is busy with a voice note; shortcuts wait until it's done.
+            State::Recording(rec) if rec.kind == Kind::Note => false,
             State::Recording(rec) if rec.binding == binding => match rec.mode {
                 Mode::PendingTap => {
                     // Second tap: keep recording hands-free.
@@ -289,7 +338,7 @@ impl Actor {
     fn on_release(&mut self, binding: Binding) {
         let double_tap = self.deps.settings.get().double_tap_lock;
         let State::Recording(rec) = &mut self.state else { return };
-        if rec.binding != binding {
+        if rec.binding != binding || rec.kind == Kind::Note {
             return;
         }
         if std::mem::take(&mut rec.ignore_next_release) {
@@ -332,7 +381,8 @@ impl Actor {
             return;
         }
 
-        self.deps.recording.store(true, Ordering::Release);
+        // Escape is only swallowed for dictations; a note leaves the keyboard alone.
+        self.deps.recording.store(kind != Kind::Note, Ordering::Release);
         let meter = {
             let (recorder, ui) = (Arc::clone(&self.deps.recorder), Arc::clone(&self.deps.ui));
             tokio::spawn(async move {
@@ -344,6 +394,7 @@ impl Actor {
             })
         };
         let preview = (settings.live_preview && kind == Kind::Dictate).then(|| spawn_preview(&self.deps, &settings));
+        let note = (kind == Kind::Note).then(|| spawn_note_chunks(&self.deps, &settings));
         let session = self.next_session;
         self.next_session += 1;
         let rec = Recording {
@@ -357,6 +408,7 @@ impl Actor {
             started_at: store::now_ms(),
             meter,
             preview,
+            note,
         };
         self.deps.ui.status(&recording_status(&rec));
         self.state = State::Recording(rec);
@@ -372,14 +424,18 @@ impl Actor {
     }
 
     fn finish(&mut self) {
-        let State::Recording(rec) = std::mem::replace(&mut self.state, State::Idle) else { return };
+        let State::Recording(mut rec) = std::mem::replace(&mut self.state, State::Idle) else { return };
+        let note = rec.note.take();
         rec.stop_tasks();
         self.deps.recording.store(false, Ordering::Release);
         self.state = State::Processing(rec.session);
         let (deps, tx, session) = (self.deps.clone(), self.tx.clone(), rec.session);
         let job = Job { kind: rec.kind, locked: rec.mode == Mode::Locked, target: rec.target, started_at: rec.started_at };
         tokio::spawn(async move {
-            process(&deps, job).await;
+            match note {
+                Some(note) => process_note(&deps, job, note).await,
+                None => process(&deps, job).await,
+            }
             let _ = tx.send(Input::Finished(session));
         });
     }
@@ -444,6 +500,208 @@ fn spawn_preview(deps: &Deps, settings: &Settings) -> JoinHandle<()> {
             }
         }
     })
+}
+
+/// Notes mode: while recording, take ~30 s of audio at a time (cut at a pause),
+/// transcribe it, and report the transcript so far. Returns the chunks when
+/// told to stop, after finishing the one in flight.
+fn spawn_note_chunks(deps: &Deps, settings: &Settings) -> NoteTask {
+    let (recorder, stt, ui) = (Arc::clone(&deps.recorder), Arc::clone(&deps.stt), Arc::clone(&deps.ui));
+    let request = stt_request(settings, &deps.store.dictionary().unwrap_or_default());
+    let options = text::Options { voice_commands: settings.voice_commands, remove_fillers: settings.remove_fillers };
+    let (stop, mut stopped) = tokio::sync::watch::channel(false);
+    let chunks = tokio::spawn(async move {
+        let mut chunks: Vec<String> = Vec::new();
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep(NOTE_POLL) => {}
+                _ = stopped.changed() => break,
+            }
+            let (recorder, stt, request) = (Arc::clone(&recorder), Arc::clone(&stt), request.clone());
+            let heard = tokio::task::spawn_blocking(move || {
+                let captured = recorder.drain(NOTE_CHUNK_SECONDS)?;
+                if !captured.has_speech {
+                    return Some(Ok(String::new()));
+                }
+                Some(stt.transcribe(&captured.samples, &request))
+            })
+            .await
+            .ok()
+            .flatten();
+            match heard {
+                Some(Ok(heard)) => {
+                    let text = text::clean(&heard, &options);
+                    if !text.is_empty() {
+                        chunks.push(text);
+                        ui.note_progress(&chunks.join("\n\n"));
+                    }
+                }
+                Some(Err(error)) => tracing::warn!("A voice note chunk couldn't be transcribed: {error}"),
+                None => {}
+            }
+        }
+        chunks
+    });
+    NoteTask { stop, chunks }
+}
+
+/// A short title from the start of the transcript, for notes without an AI summary.
+fn fallback_title(transcript: &str) -> String {
+    let words: Vec<&str> = transcript.split_whitespace().collect();
+    let title = words.iter().take(7).copied().collect::<Vec<_>>().join(" ");
+    let title = title.trim_end_matches(|c: char| c.is_ascii_punctuation());
+    if words.len() > 7 { format!("{title}…") } else { title.to_string() }
+}
+
+async fn process_note(deps: &Deps, job: Job, note: NoteTask) {
+    let status = |phase: Phase| Status { phase, kind: Kind::Note, locked: true, started_at: job.started_at, ..Status::default() };
+    deps.ui.status(&status(Phase::Transcribing));
+
+    let _ = note.stop.send(true);
+    let mut chunks = note.chunks.await.unwrap_or_default();
+    let recorder = Arc::clone(&deps.recorder);
+    let rest = match blocking(move || recorder.stop()).await {
+        Ok(rest) => rest,
+        Err(error) => {
+            tracing::warn!("Voice note: {error}");
+            Captured::default()
+        }
+    };
+    let settings = deps.settings.get();
+    let dictionary = deps.store.dictionary().unwrap_or_default();
+    if rest.has_speech {
+        let (stt, request, samples) = (Arc::clone(&deps.stt), stt_request(&settings, &dictionary), rest.samples);
+        match blocking(move || stt.transcribe(&samples, &request)).await {
+            Ok(heard) => {
+                let options = text::Options { voice_commands: settings.voice_commands, remove_fillers: settings.remove_fillers };
+                let text = text::clean(&heard, &options);
+                if !text.is_empty() {
+                    chunks.push(text);
+                }
+            }
+            Err(error) if chunks.is_empty() => {
+                return deps.ui.status(&Status { message: Some(error.to_string()), ..status(Phase::Error) });
+            }
+            Err(error) => tracing::warn!("The end of a voice note couldn't be transcribed: {error}"),
+        }
+    }
+
+    let transcript = text::apply_replacements(&chunks.join("\n\n"), &dictionary);
+    if transcript.trim().is_empty() {
+        return deps.ui.status(&Status { message: Some("No speech was heard, so no note was saved.".into()), ..status(Phase::Error) });
+    }
+    deps.ui.note_progress(&transcript);
+
+    let polisher = (deps.polisher)(&settings);
+    let (mut title, mut summary, mut notice) = (String::new(), String::new(), None);
+    if polisher.enabled() && store::word_count(&transcript) >= NOTE_SUMMARY_MIN_WORDS {
+        deps.ui.status(&status(Phase::Polishing));
+        let request = llm::Request {
+            task: Task::Summarize { transcript: transcript.clone() },
+            style_prompt: String::new(),
+            vocabulary: text::vocabulary(&dictionary),
+        };
+        match polisher.run(request).await {
+            Ok(text) => (title, summary) = llm::prompts::split_summary(&text),
+            Err(error) => notice = Some(format!("Saved without a summary ({error}).")),
+        }
+    }
+    if title.is_empty() {
+        title = fallback_title(&transcript);
+    }
+
+    let duration_ms = (store::now_ms() - job.started_at).max(0);
+    let store = Arc::clone(&deps.store);
+    let (saved_title, saved_transcript) = (title.clone(), transcript.clone());
+    match blocking(move || store.add_note(&saved_title, &saved_transcript, &summary, duration_ms)).await {
+        Ok(_) => {
+            deps.ui.status(&Status { text: Some(title), message: notice, ..status(Phase::Done) });
+            deps.ui.data_changed();
+        }
+        Err(error) => {
+            // Don't lose a long recording to a disk error: put it on the clipboard.
+            let _ = deps.desktop.copy(&transcript);
+            deps.ui.status(&Status {
+                message: Some(format!("Couldn't save the note ({error}). The transcript is on your clipboard.")),
+                ..status(Phase::Error)
+            });
+        }
+    }
+}
+
+/// Opt-in learning: after a paste, re-read the field. Once the user has edited
+/// what Hams wrote and the text has settled, turn short word fixes into
+/// dictionary *suggestions*. The field text itself is never stored.
+fn spawn_field_learning(deps: &Deps, target: AppTarget, pasted: String) {
+    let (desktop, store, ui) = (Arc::clone(&deps.desktop), Arc::clone(&deps.store), Arc::clone(&deps.ui));
+    tokio::spawn(async move {
+        let read = || {
+            let (desktop, target) = (Arc::clone(&desktop), target.clone());
+            async move { tokio::task::spawn_blocking(move || desktop.field_text(&target)).await.ok().flatten() }
+        };
+        tokio::time::sleep(FIELD_SETTLE).await;
+        let Some(before) = read().await.filter(|field| field.contains(pasted.trim())) else { return };
+        let mut last = before.clone();
+        for _ in 0..FIELD_CHECKS {
+            tokio::time::sleep(FIELD_CHECK_EVERY).await;
+            let Some(now) = read().await else { return };
+            if now != before && now == last {
+                let learned = text::learn_from_field(&pasted, &before, &now);
+                for (heard, correct) in &learned {
+                    let _ = store.add_suggestion(heard, correct);
+                }
+                if !learned.is_empty() {
+                    tracing::info!("Learned {} suggestion(s) from an edit in {}", learned.len(), target.name);
+                    ui.data_changed();
+                }
+                return;
+            }
+            last = now;
+        }
+    });
+}
+
+fn stt_request(settings: &Settings, dictionary: &[store::DictionaryEntry]) -> SttRequest {
+    SttRequest { language: settings.language.clone(), model: settings.model.clone(), vocabulary: text::vocabulary(dictionary) }
+}
+
+/// A History item rewritten in another style.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Restyled {
+    pub text: String,
+    /// False when the AI is off (or the style skips it), so only local rules ran.
+    pub polished: bool,
+}
+
+/// Rewrite an old dictation in `style`, starting from what Whisper heard so
+/// earlier styling doesn't compound. Same pipeline as a live dictation, minus
+/// snippets and smart skip: the user asked for this one explicitly.
+pub async fn restyle(
+    source: &str,
+    style: Style,
+    settings: &Settings,
+    dictionary: &[store::DictionaryEntry],
+    polisher: &dyn Polisher,
+) -> AppResult<Restyled> {
+    let options = text::Options { voice_commands: settings.voice_commands, remove_fillers: settings.remove_fillers };
+    let cleaned = text::clean(source, &options);
+    if cleaned.is_empty() {
+        return Err(AppError::Other("there's no text to rewrite".into()));
+    }
+    let resolved = styles::configure(style, &settings.style_overrides);
+    let polished = polisher.enabled() && resolved.polish;
+    let text = if polished {
+        polisher
+            .run(llm::Request {
+                task: Task::Polish { transcript: cleaned },
+                style_prompt: resolved.prompt,
+                vocabulary: text::vocabulary(dictionary),
+            })
+            .await?
+    } else {
+        cleaned
+    };
+    Ok(Restyled { text: style.finish(&text::apply_replacements(&text, dictionary)), polished })
 }
 
 // ---- the processing pipeline ------------------------------------------------------
@@ -539,6 +797,8 @@ async fn process(deps: &Deps, job: Job) {
                 (style.finish(&text::apply_replacements(&polished, &dictionary)), notice)
             }
         }
+        // Voice notes are handled by `process_note`.
+        Kind::Note => return deps.ui.status(&Status::default()),
         Kind::Command => {
             if !polisher.enabled() {
                 return fail(AppError::Polish(
@@ -575,6 +835,12 @@ async fn process(deps: &Deps, job: Job) {
         transcribed_in.as_millis(),
         store::word_count(&final_text)
     );
+
+    if settings.learn_from_fields && !into_self && matches!(delivered, Ok(Delivered::Pasted)) {
+        if let Some(target) = job.target.clone() {
+            spawn_field_learning(deps, target, final_text.clone());
+        }
+    }
 
     let delivery = match &delivered {
         Ok(Delivered::Pasted) => "pasted",
@@ -623,6 +889,8 @@ mod tests {
         starts: Mutex<u32>,
         cancels: Mutex<u32>,
         speech: Mutex<bool>,
+        /// Voice-note chunks still to hand out from `drain`.
+        chunks: Mutex<u32>,
     }
     impl Recorder for FakeRecorder {
         fn start(&self, _: Option<&str>) -> AppResult<()> {
@@ -641,6 +909,13 @@ mod tests {
         fn snapshot(&self) -> Option<Captured> {
             Some(Captured { samples: vec![0.0; 16_000], duration_ms: 1_000, has_speech: *self.speech.lock() })
         }
+        fn drain(&self, _: u32) -> Option<Captured> {
+            let mut left = self.chunks.lock();
+            (*left > 0).then(|| {
+                *left -= 1;
+                Captured { samples: vec![0.0; 16_000], duration_ms: 30_000, has_speech: true }
+            })
+        }
     }
 
     struct FakeStt(String);
@@ -653,6 +928,8 @@ mod tests {
     #[derive(Default)]
     struct FakeDesktop {
         delivered: Mutex<Vec<(String, DeliveryMode)>>,
+        /// Successive reads of the focused field; the last one repeats.
+        fields: Mutex<std::collections::VecDeque<String>>,
     }
     impl Desktop for FakeDesktop {
         fn frontmost(&self) -> Option<AppTarget> {
@@ -668,12 +945,17 @@ mod tests {
         fn selected_text(&self, _: Option<&AppTarget>, _: bool) -> Option<String> {
             Some("hello there".into())
         }
+        fn field_text(&self, _: &AppTarget) -> Option<String> {
+            let mut fields = self.fields.lock();
+            if fields.len() > 1 { fields.pop_front() } else { fields.front().cloned() }
+        }
     }
 
     #[derive(Default)]
     struct FakeUi {
         statuses: Mutex<Vec<Status>>,
         partials: Mutex<Vec<String>>,
+        notes: Mutex<Vec<String>>,
     }
     impl Ui for FakeUi {
         fn status(&self, status: &Status) {
@@ -682,6 +964,9 @@ mod tests {
         fn level(&self, _: f32) {}
         fn partial(&self, text: &str) {
             self.partials.lock().push(text.to_string());
+        }
+        fn note_progress(&self, text: &str) {
+            self.notes.lock().push(text.to_string());
         }
     }
 
@@ -784,6 +1069,82 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(3)).await;
         assert_eq!(h.ui.partials.lock().len(), after_release, "preview stops when recording ends");
         assert_eq!(h.delivered(), vec!["Live words".to_string()]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn voice_note_is_chunked_summarised_and_saved_not_pasted() {
+        let spoken = "we agreed to ship the launch on friday and the team will write the notes tonight";
+        let h = harness(spoken, Some(Ok("Launch plan.\n\n- Ship on Friday".into())));
+        let mut settings = Settings::default();
+        settings.ai.provider = crate::settings::AiProvider::Gemini;
+        h.settings.save(settings).unwrap();
+        *h.recorder.chunks.lock() = 2;
+
+        h.send(Input::Note);
+        tokio::time::sleep(Duration::from_millis(3_500)).await;
+        assert_eq!(h.ui.notes.lock().len(), 2, "each chunk reports progress while recording");
+
+        // The mic is busy: dictation shortcuts and Escape leave the note alone.
+        h.press();
+        h.release();
+        h.send(Input::Hotkey(HotkeyAction::Escape));
+        settle().await;
+        assert_eq!(*h.recorder.starts.lock(), 1);
+        assert_eq!(*h.recorder.cancels.lock(), 0);
+
+        h.send(Input::Note);
+        settle().await;
+        assert!(h.delivered().is_empty(), "notes are never pasted");
+        let notes = h.store.notes("").unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].title, "Launch plan");
+        assert_eq!(notes[0].summary, "- Ship on Friday");
+        assert_eq!(notes[0].transcript.split("\n\n").count(), 3, "two chunks plus the tail");
+        let last = h.ui.statuses.lock().last().cloned().unwrap();
+        assert_eq!((last.phase, last.kind), (Phase::Done, Kind::Note));
+        assert!(h.store.history("", 10).unwrap().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn short_note_without_ai_gets_a_title_from_its_words() {
+        let h = harness("buy milk eggs and bread on the way home tonight please", None);
+        h.send(Input::Note);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        h.send(Input::Note);
+        settle().await;
+        let notes = h.store.notes("").unwrap();
+        assert_eq!(notes[0].title, "Buy milk eggs and bread on the…");
+        assert!(notes[0].summary.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn edits_in_the_target_field_become_suggestions_when_opted_in() {
+        let h = harness("ship the hams build", None);
+        h.settings.save(Settings { learn_from_fields: true, ..Settings::default() }).unwrap();
+        *h.desktop.fields.lock() = ["Ship the hams build", "Ship the Hams build", "Ship the Hams build"]
+            .map(String::from)
+            .into();
+        h.press();
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        h.release();
+        settle().await;
+        tokio::time::sleep(Duration::from_secs(12)).await;
+        let suggestions = h.store.suggestions().unwrap();
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!((suggestions[0].heard.as_str(), suggestions[0].correct.as_str()), ("hams", "Hams"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fields_are_not_read_unless_opted_in() {
+        let h = harness("ship the hams build", None);
+        *h.desktop.fields.lock() = ["Ship the hams build", "Ship the Hams build"].map(String::from).into();
+        h.press();
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        h.release();
+        settle().await;
+        tokio::time::sleep(Duration::from_secs(12)).await;
+        assert!(h.store.suggestions().unwrap().is_empty());
+        assert_eq!(h.desktop.fields.lock().len(), 2, "the field was never read");
     }
 
     #[tokio::test(start_paused = true)]
@@ -954,5 +1315,24 @@ mod tests {
         h.release();
         settle().await;
         assert_eq!(h.delivered(), vec!["Ship it on Tauri today, please.".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn restyle_starts_from_what_was_heard_and_keeps_dictionary_fixes() {
+        let settings = Settings::default();
+        let dictionary = vec![store::DictionaryEntry { id: 1, term: "tauri".into(), replacement: Some("Tauri".into()), source: "user".into() }];
+        // AI off: only the style's local rules run.
+        let off = restyle("see you on tauri tomorrow.", Style::Messaging, &settings, &dictionary, &FakePolisher(None)).await.unwrap();
+        assert_eq!(off, Restyled { text: "See you on Tauri tomorrow".into(), polished: false });
+        // AI on: the polished text still gets the dictionary and the style finish.
+        let ai = FakePolisher(Some(Ok("Hello, see you on tauri tomorrow.".into())));
+        let on = restyle("see you on tauri tomorrow", Style::Email, &settings, &dictionary, &ai).await.unwrap();
+        assert_eq!(on, Restyled { text: "Hello, see you on Tauri tomorrow.".into(), polished: true });
+        // An explicit rewrite reports AI failures instead of hiding them.
+        let failing = FakePolisher(Some(Err(AppError::Polish("offline".into()))));
+        assert!(restyle("hello there", Style::Email, &settings, &dictionary, &failing).await.is_err());
+        // The code style skips the AI by default.
+        let code = restyle("npm run dev", Style::Code, &settings, &dictionary, &ai).await.unwrap();
+        assert!(!code.polished);
     }
 }

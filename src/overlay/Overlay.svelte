@@ -33,6 +33,7 @@
   const elapsed = $derived(status?.started_at ? Math.max(0, Math.floor((now - status.started_at) / 1000)) : 0);
   const clock = $derived(`${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`);
   const label = $derived(
+    status?.kind === "note" && phase === "transcribing" ? "Finishing note" : status?.kind === "note" && phase === "polishing" ? "Summarising" :
     phase === "transcribing" ? "Transcribing" : phase === "polishing" ? (status?.kind === "command" ? "Working" : "Polishing") : phase === "delivering" ? "Pasting" : "",
   );
 </script>
@@ -45,9 +46,14 @@
 
 <div class="pill {phase}" class:command={status?.kind === "command"} class:below={phase === "recording" && status?.preview}>
   {#if phase === "recording"}
-    <button class="icon" title="Cancel (Esc)" aria-label="Cancel" onclick={() => invoke("dictation_cancel")}>
-      <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" /></svg>
-    </button>
+    {#if status?.kind === "note"}
+      <!-- A long note is never one click from being thrown away; discard it from the Notes screen. -->
+      <span class="tag">Note</span>
+    {:else}
+      <button class="icon" title="Cancel (Esc)" aria-label="Cancel" onclick={() => invoke("dictation_cancel")}>
+        <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+      </button>
+    {/if}
     <div class="bars" aria-hidden="true">
       {#each shape as s}
         <span style="transform: scaleY({Math.max(0.12, Math.min(1, level * s * 1.25))})"></span>
@@ -59,7 +65,7 @@
     </button>
   {:else if phase === "done"}
     <svg class="tick" viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" /></svg>
-    <span>Done</span>
+    <span>{status?.kind === "note" ? "Note saved" : "Done"}</span>
   {:else if phase === "error"}
     <span class="message">{status?.message ?? "Something went wrong"}</span>
   {:else if phase !== "idle"}
@@ -102,6 +108,7 @@
   .tick { color: #6fcf97; }
   .bars { display: flex; align-items: center; gap: 3px; height: 24px; }
   .bars span { width: 3px; height: 24px; border-radius: 2px; background: #fff; transform-origin: center; transition: transform 70ms linear; }
+  .tag { font-size: 11.5px; padding: 3px 9px; border-radius: 999px; background: rgba(255, 255, 255, 0.12); }
   .time { font-variant-numeric: tabular-nums; font-size: 12px; opacity: 0.8; min-width: 34px; }
   .message { font-weight: 500; font-size: 12.5px; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; }
   .spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.25); border-top-color: #fff; animation: spin 0.8s linear infinite; }

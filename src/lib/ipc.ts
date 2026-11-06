@@ -1,140 +1,43 @@
-// Typed bridge to the Rust commands in src-tauri/src/commands.rs.
-// Keep these types in sync with the serde structs on the Rust side.
+// Typed bridge to the Rust commands in src-tauri/src/commands.rs. Command names
+// and argument names are written here by hand; the data types are generated.
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type * as Rust from "./bindings";
 
 export const inTauri = "__TAURI_INTERNALS__" in window;
 
-export type Phase = "idle" | "recording" | "transcribing" | "polishing" | "delivering" | "done" | "error";
+// Types the Rust side sends, generated from the serde structs (see bindings.ts).
+// The `_Serialize` shapes are what Rust emits; they're also valid to send back.
+export type Phase = Rust.Phase;
+export type Status = Rust.Status_Serialize;
+export type DeliveryMode = Rust.DeliveryMode;
+export type AiProvider = Rust.AiProvider;
+export type AiSettings = Rust.AiSettings_Serialize;
+export type StyleId = Rust.Style;
+export type StyleOverride = Rust.StyleOverride_Serialize;
+export type AppRule = Rust.AppRule;
+export type Settings = Rust.Settings_Serialize;
+export type SettingsView = Rust.SettingsView_Serialize;
+export type HistoryItem = Rust.HistoryItem;
+export type Stats = Rust.Stats;
+export type Note = Rust.Note;
+export type DictionaryEntry = Rust.DictionaryEntry_Serialize;
+export type Snippet = Rust.Snippet;
+export type Suggestion = Rust.Suggestion;
+export type ModelStatus = Rust.ModelStatus;
+export type ModelProgress = Rust.ModelProgress;
+export type StyleInfo = Rust.StyleInfo;
+export type Permissions = Rust.Permissions;
+export type RestyleResult = Rust.RestyleResult;
+export type UpdateInfo = Rust.UpdateInfo;
+export type UpdateProgress = Rust.UpdateProgress_Serialize;
 
-export interface Status {
-  phase: Phase;
-  kind: "dictate" | "command";
-  locked: boolean;
-  started_at: number;
-  message: string | null;
-  text: string | null;
-  app: string | null;
-  preview: boolean;
-}
-
-export type DeliveryMode = "paste_restore" | "paste" | "copy_only";
-export type AiProvider = "off" | "gemini" | "open_ai" | "groq" | "open_router" | "anthropic" | "ollama" | "custom";
-
-export interface AiSettings {
-  provider: AiProvider;
-  model: string;
-  base_url: string;
-  smart_skip_words: number;
-  timeout_ms: number;
-}
-
-export type StyleId = "default" | "messaging" | "email" | "code" | "docs";
-
-export interface StyleOverride {
-  prompt: string | null;
-  polish: boolean | null;
-}
-
-export interface AppRule {
-  app: string;
-  style: StyleId;
-}
-
-export interface Settings {
-  dictate_shortcut: string;
-  command_shortcut: string;
-  paste_last_shortcut: string;
-  double_tap_lock: boolean;
-  microphone: string | null;
-  language: string;
-  model: string;
-  delivery: DeliveryMode;
-  remove_fillers: boolean;
-  voice_commands: boolean;
-  live_preview: boolean;
-  app_styles: boolean;
-  style_overrides: Partial<Record<StyleId, StyleOverride>>;
-  app_rules: AppRule[];
-  learn_from_edits: boolean;
-  ai: AiSettings;
-  onboarding_done: boolean;
-}
-
-export interface SettingsView {
-  settings: Settings;
-  has_api_key: boolean;
-  platform: "macos" | "windows";
-  hotkey_error: string | null;
-}
-
-export interface HistoryItem {
-  id: number;
-  created_at: number;
-  text: string;
-  app: string;
-  style: string;
-  delivery: string;
-  duration_ms: number;
-  words: number;
-  pinned: boolean;
-}
-
-export interface Stats {
-  total_words: number;
-  total_dictations: number;
-  words_today: number;
-  average_wpm: number;
-  minutes_saved: number;
-  current_streak: number;
-  longest_streak: number;
-  activity: [string, number][];
-}
-
-export interface DictionaryEntry {
-  id: number;
-  term: string;
-  replacement: string | null;
-  source: string;
-}
-
-export interface Snippet {
-  id: number;
-  trigger: string;
-  expansion: string;
-}
-
-export interface Suggestion {
-  id: number;
-  heard: string;
-  correct: string;
-  count: number;
-}
-
-export interface ModelStatus {
-  id: string;
-  file: string;
-  label: string;
-  size_mb: number;
-  multilingual: boolean;
-  note: string;
-  installed: boolean;
-}
-
-export interface StyleInfo {
-  id: StyleId;
-  label: string;
-  prompt: string;
-  polish: boolean;
-}
-
-export interface Permissions {
-  accessibility: boolean;
-  applicable: boolean;
-}
-
-function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
-  if (!inTauri) return Promise.reject(new Error("Hams' native core isn't running (browser preview)."));
+async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  if (!inTauri) {
+    // `vite dev` in a plain browser: sample data, so screens can be designed and checked.
+    if (import.meta.env.DEV) return (await import("./mock")).mockCall(command, args) as T;
+    throw new Error("Hams' native core isn't running (browser preview).");
+  }
   return invoke<T>(command, args);
 }
 
@@ -145,6 +48,10 @@ export const api = {
   getStatus: () => call<Status>("get_status"),
   toggle: () => call<void>("dictation_toggle"),
   stop: () => call<void>("dictation_stop"),
+  noteToggle: () => call<void>("note_toggle"),
+  notes: (query = "") => call<Note[]>("notes", { query }),
+  noteRename: (id: number, title: string) => call<void>("note_rename", { id, title }),
+  noteDelete: (id: number) => call<void>("note_delete", { id }),
   cancel: () => call<void>("dictation_cancel"),
   microphones: () => call<string[]>("list_microphones"),
   models: () => call<ModelStatus[]>("list_models"),
@@ -152,6 +59,7 @@ export const api = {
   deleteModel: (id: string) => call<void>("delete_model", { id }),
   history: (query = "", limit?: number) => call<HistoryItem[]>("history", { query, limit }),
   historyUpdate: (id: number, text: string) => call<number>("history_update", { id, text }),
+  historyRestyle: (id: number, style: StyleId) => call<RestyleResult>("history_restyle", { id, style }),
   historyPin: (id: number, pinned: boolean) => call<void>("history_pin", { id, pinned }),
   historyDelete: (id: number) => call<void>("history_delete", { id }),
   historyClear: () => call<void>("history_clear"),
@@ -175,6 +83,9 @@ export const api = {
   testAi: () => call<string>("test_ai"),
   autostartEnabled: () => call<boolean>("autostart_enabled"),
   setAutostart: (enabled: boolean) => call<void>("set_autostart", { enabled }),
+  appVersion: () => call<string>("app_version"),
+  updateCheck: () => call<UpdateInfo | null>("update_check"),
+  updateInstall: () => call<void>("update_install"),
 };
 
 export function on<T>(event: string, handler: (payload: T) => void): Promise<UnlistenFn> {

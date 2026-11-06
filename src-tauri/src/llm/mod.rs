@@ -18,6 +18,18 @@ pub enum Task {
     Polish { transcript: String },
     /// Command mode: apply a spoken instruction to the selection (or write new text).
     Edit { instruction: String, selection: Option<String> },
+    /// Notes mode: title and key points for a long transcript.
+    Summarize { transcript: String },
+}
+
+impl Task {
+    /// Summaries read a long transcript, so they get more time than a paste-path polish.
+    fn min_timeout(&self) -> Duration {
+        match self {
+            Task::Summarize { .. } => Duration::from_secs(60),
+            _ => Duration::ZERO,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -80,7 +92,7 @@ impl LlmClient {
         }
     }
 
-    async fn call(self: std::sync::Arc<Self>, system: String, user: String) -> AppResult<String> {
+    async fn call(self: std::sync::Arc<Self>, system: String, user: String, min_timeout: Duration) -> AppResult<String> {
         let provider = self.settings.provider;
         let key = self.api_key.clone().unwrap_or_default();
         if provider.needs_key() && key.is_empty() {
@@ -133,7 +145,8 @@ impl LlmClient {
             }
         };
 
-        let response = request.send().await.map_err(|e| {
+        let timeout = Duration::from_millis(self.settings.timeout_ms).max(min_timeout);
+        let response = request.timeout(timeout).send().await.map_err(|e| {
             // Never echo the URL: some providers put credentials there.
             AppError::Polish(if e.is_timeout() { "timed out".into() } else { "could not reach the AI provider".into() })
         })?;
@@ -173,7 +186,7 @@ impl Polisher for std::sync::Arc<LlmClient> {
     fn run(&self, request: Request) -> BoxFuture<'static, AppResult<String>> {
         let (system, user) = prompts::build(&request);
         let client = std::sync::Arc::clone(self);
-        Box::pin(client.call(system, user))
+        Box::pin(client.call(system, user, request.task.min_timeout()))
     }
 }
 

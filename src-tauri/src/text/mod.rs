@@ -240,9 +240,37 @@ pub fn learn_corrections(before: &str, after: &str) -> Vec<(String, String)> {
     vec![(old.join(" "), new.join(" "))]
 }
 
+/// Learn from an edit made directly in the app Hams pasted into. `before` is the
+/// field right after the paste and `after` is the field once the user has
+/// settled. The text around the paste must be unchanged, so only edits inside
+/// what Hams wrote are learned from.
+pub fn learn_from_field(pasted: &str, before: &str, after: &str) -> Vec<(String, String)> {
+    let pasted = pasted.trim();
+    let Some(start) = before.rfind(pasted).filter(|_| !pasted.is_empty()) else { return Vec::new() };
+    let (head, tail) = (&before[..start], &before[start + pasted.len()..]);
+    match after.strip_prefix(head).and_then(|rest| rest.strip_suffix(tail)) {
+        Some(edited) => learn_corrections(pasted, edited),
+        None => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod learning_tests {
-    use super::learn_corrections;
+    use super::{learn_corrections, learn_from_field};
+
+    #[test]
+    fn learns_from_edits_inside_the_pasted_text_only() {
+        let pasted = "Ship the hams build today.";
+        let before = format!("Notes:\n{pasted}\nThanks");
+        let fixed = before.replace("hams", "Hams");
+        assert_eq!(learn_from_field(pasted, &before, &fixed), vec![("hams".to_string(), "Hams".to_string())]);
+        // An edit outside what Hams wrote teaches nothing.
+        assert!(learn_from_field(pasted, &before, &before.replace("Thanks", "Cheers")).is_empty());
+        // Typing more after the paste isn't a correction.
+        assert!(learn_from_field(pasted, pasted, &format!("{pasted} And then lunch.")).is_empty());
+        // The field no longer holds the paste (sent, cleared, another field).
+        assert!(learn_from_field(pasted, "", "anything").is_empty());
+    }
 
     #[test]
     fn learns_short_word_fixes() {

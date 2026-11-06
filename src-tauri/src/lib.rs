@@ -1,6 +1,8 @@
 //! Hams: hold a key, speak, and polished text appears wherever you're typing.
 
 mod audio;
+#[cfg(test)]
+mod bindings;
 mod commands;
 mod controller;
 mod error;
@@ -17,6 +19,7 @@ mod store;
 mod stt;
 mod text;
 mod ui;
+mod updater;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, OnceLock};
@@ -89,8 +92,9 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let secrets = Arc::new(SecretCache::default());
     let recording = Arc::new(AtomicBool::new(false));
 
+    let recorder = Arc::new(audio::AudioRecorder::new());
     let deps = Deps {
-        recorder: Arc::new(audio::AudioRecorder::new()),
+        recorder: recorder.clone(),
         stt: Arc::clone(&stt),
         desktop: Arc::new(platform::NativeDesktop),
         polisher: {
@@ -126,6 +130,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     let state = AppState {
         controller,
+        recorder,
         store,
         settings,
         ui,
@@ -135,14 +140,18 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         secrets,
     };
     state.warm_up(&current.model);
+    state.apply_microphone(&current);
     app.manage(state);
+    app.manage(updater::Updates::default());
+    updater::spawn_checks(handle.clone());
 
     // Menu-bar / tray menu.
     let show = MenuItem::with_id(app, "show", "Open Hams", true, None::<&str>)?;
     let paste = MenuItem::with_id(app, "paste_last", "Paste Last Dictation", true, None::<&str>)?;
+    let note = MenuItem::with_id(app, "note", "Start or Finish a Voice Note", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Hams", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&show, &paste, &separator, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &note, &paste, &separator, &quit])?;
     let mut tray = TrayIconBuilder::with_id("hams").menu(&menu).tooltip("Hams");
     #[cfg(target_os = "macos")]
     {
@@ -157,6 +166,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     tray.on_menu_event(|app, event| match event.id.as_ref() {
         "show" => show_main(app),
         "paste_last" => app.state::<AppState>().controller.send(Input::PasteLast),
+        "note" => app.state::<AppState>().controller.send(Input::Note),
         "quit" => app.exit(0),
         _ => {}
     })
@@ -183,6 +193,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![HIDDEN_ARG]),
         ))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(setup)
         .on_window_event(|window, event| {
             // Closing the main window keeps Hams running in the menu bar.
@@ -202,6 +213,10 @@ pub fn run() {
             commands::get_status,
             commands::dictation_toggle,
             commands::dictation_stop,
+            commands::note_toggle,
+            commands::notes,
+            commands::note_rename,
+            commands::note_delete,
             commands::dictation_cancel,
             commands::list_microphones,
             commands::list_models,
@@ -209,6 +224,7 @@ pub fn run() {
             commands::delete_model,
             commands::history,
             commands::history_update,
+            commands::history_restyle,
             commands::history_pin,
             commands::history_delete,
             commands::history_clear,
@@ -231,6 +247,9 @@ pub fn run() {
             commands::test_ai,
             commands::autostart_enabled,
             commands::set_autostart,
+            commands::app_version,
+            commands::update_check,
+            commands::update_install,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Hams");

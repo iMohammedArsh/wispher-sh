@@ -65,6 +65,19 @@ const MIGRATIONS: &[&str] = &[
         UNIQUE(heard, correct)
     );
     "#,
+    // v2: voice notes (long recordings, transcribed in chunks, optionally summarised)
+    r#"
+    CREATE TABLE notes (
+        id          INTEGER PRIMARY KEY,
+        created_at  INTEGER NOT NULL,
+        duration_ms INTEGER NOT NULL DEFAULT 0,
+        title       TEXT    NOT NULL DEFAULT '',
+        transcript  TEXT    NOT NULL,
+        summary     TEXT    NOT NULL DEFAULT '',
+        words       INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX notes_created ON notes(created_at DESC);
+    "#,
 ];
 
 pub fn now_ms() -> i64 {
@@ -79,6 +92,7 @@ pub fn word_count(text: &str) -> i64 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(test, derive(specta::Type))]
 pub struct HistoryItem {
     pub id: i64,
     pub created_at: i64,
@@ -102,6 +116,7 @@ pub struct NewHistory<'a> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(test, derive(specta::Type))]
 pub struct DictionaryEntry {
     pub id: i64,
     pub term: String,
@@ -111,6 +126,7 @@ pub struct DictionaryEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(test, derive(specta::Type))]
 pub struct Snippet {
     pub id: i64,
     pub trigger: String,
@@ -118,6 +134,7 @@ pub struct Snippet {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(test, derive(specta::Type))]
 pub struct Suggestion {
     pub id: i64,
     pub heard: String,
@@ -126,6 +143,7 @@ pub struct Suggestion {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[cfg_attr(test, derive(specta::Type))]
 pub struct Stats {
     pub total_words: i64,
     pub total_dictations: i64,
@@ -137,6 +155,19 @@ pub struct Stats {
     pub longest_streak: i64,
     /// (local date "YYYY-MM-DD", words) for the last 120 days with activity.
     pub activity: Vec<(String, i64)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(test, derive(specta::Type))]
+pub struct Note {
+    pub id: i64,
+    pub created_at: i64,
+    pub duration_ms: i64,
+    pub title: String,
+    pub transcript: String,
+    /// Markdown-ish bullets from the AI, or empty when AI is off.
+    pub summary: String,
+    pub words: i64,
 }
 
 pub struct Store {
@@ -273,6 +304,23 @@ impl Store {
             .lock()
             .query_row("SELECT text FROM history WHERE id = ?1", [id], |r| r.get(0))
             .optional()?)
+    }
+
+    /// What Whisper heard for an item (falls back to the final text for imported items).
+    pub fn history_source(&self, id: i64) -> AppResult<Option<String>> {
+        Ok(self
+            .conn
+            .lock()
+            .query_row("SELECT CASE WHEN raw = '' THEN text ELSE raw END FROM history WHERE id = ?1", [id], |r| r.get(0))
+            .optional()?)
+    }
+
+    pub fn restyle_history(&self, id: i64, text: &str, style: &str) -> AppResult<()> {
+        self.conn.lock().execute(
+            "UPDATE history SET text = ?2, style = ?3, words = ?4 WHERE id = ?1",
+            params![id, text, style, word_count(text)],
+        )?;
+        Ok(())
     }
 
     pub fn update_history_text(&self, id: i64, text: &str) -> AppResult<()> {
@@ -457,6 +505,55 @@ impl Store {
     }
 }
 
+impl Store {
+    // ---- notes -------------------------------------------------------------
+
+    pub fn add_note(&self, title: &str, transcript: &str, summary: &str, duration_ms: i64) -> AppResult<i64> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO notes(created_at, duration_ms, title, transcript, summary, words)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![now_ms(), duration_ms, title, transcript, summary, word_count(transcript)],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Newest first; `query` filters on title, transcript and summary.
+    pub fn notes(&self, query: &str) -> AppResult<Vec<Note>> {
+        let conn = self.conn.lock();
+        let pattern = format!("%{}%", query.trim().replace(['%', '_'], ""));
+        let mut stmt = conn.prepare(
+            "SELECT id, created_at, duration_ms, title, transcript, summary, words FROM notes
+             WHERE ?1 = '%%' OR title LIKE ?1 OR transcript LIKE ?1 OR summary LIKE ?1
+             ORDER BY created_at DESC LIMIT 500",
+        )?;
+        let rows = stmt
+            .query_map([pattern], |r| {
+                Ok(Note {
+                    id: r.get(0)?,
+                    created_at: r.get(1)?,
+                    duration_ms: r.get(2)?,
+                    title: r.get(3)?,
+                    transcript: r.get(4)?,
+                    summary: r.get(5)?,
+                    words: r.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn rename_note(&self, id: i64, title: &str) -> AppResult<()> {
+        self.conn.lock().execute("UPDATE notes SET title = ?2 WHERE id = ?1", params![id, title.trim()])?;
+        Ok(())
+    }
+
+    pub fn delete_note(&self, id: i64) -> AppResult<()> {
+        self.conn.lock().execute("DELETE FROM notes WHERE id = ?1", [id])?;
+        Ok(())
+    }
+}
+
 /// Turn free text into a safe FTS5 query: each word quoted, with a prefix wildcard.
 fn fts_prefix_query(query: &str) -> String {
     query
@@ -557,6 +654,21 @@ mod tests {
         let entries = store.dictionary().unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].replacement.as_deref(), Some("Tauri 2"));
+    }
+
+    #[test]
+    fn notes_round_trip_and_search() {
+        let store = Store::open_in_memory().unwrap();
+        let id = store.add_note("Standup", "We shipped the overlay today.", "- Overlay shipped", 61_000).unwrap();
+        store.add_note("", "Groceries: milk and eggs.", "", 9_000).unwrap();
+        assert_eq!(store.notes("").unwrap().len(), 2);
+        let found = store.notes("overlay").unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].words, 5);
+        store.rename_note(id, " Daily standup ").unwrap();
+        assert_eq!(store.notes("standup").unwrap()[0].title, "Daily standup");
+        store.delete_note(id).unwrap();
+        assert_eq!(store.notes("").unwrap().len(), 1);
     }
 
     #[test]

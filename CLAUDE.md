@@ -23,7 +23,10 @@ cargo test controller::           # one module; or a single test name
 # Real speech, end to end (macOS, needs the "small" model downloaded):
 say -o /tmp/hams.wav --data-format=LEI16@22050 "Hello from Hams. This is a dictation test."
 HAMS_TEST_WAV=/tmp/hams.wav cargo test --release real_speech -- --ignored --nocapture
+# Notes chunking on real speech: a 45 s+ WAV (`say -f notes.txt -o /tmp/note.wav ...`) as HAMS_TEST_NOTE_WAV
+cargo test bindings               # regenerates src/lib/bindings.ts; fails once if it was out of date
 scripts/install-macos.sh          # release build → /Applications (signs with "Hams Local Signing" if present)
+scripts/release-macos.sh          # signed build + draft GitHub Release with latest.json (see Updates below)
 scripts/build-icon.sh             # regenerate all icons from icons/source + Hams.icon (needs Xcode's actool)
 ```
 
@@ -67,14 +70,21 @@ The npm `tauri` script prepends Homebrew rustup to `PATH`. Do the same in a shel
 | `commands.rs` | Thin IPC wrappers, registered in `lib.rs`. |
 
 **Frontend.** There are two Vite entry points, `main.html` and `overlay.html`. The overlay bundle (`src/overlay/`) must stay tiny, so it never imports the app's routes or CSS.
-- `src/lib/ipc.ts` holds hand-written types that mirror the Rust serde structs. Keep them in sync when you change a Rust type.
+- `src/lib/bindings.ts` is generated from the Rust types by `cargo test bindings` (`src-tauri/src/bindings.rs`; specta is a dev-dependency, enabled with `#[cfg_attr(test, derive(specta::Type))]`). When you add a type the frontend receives, derive it there and register it in `bindings.rs`. `src/lib/ipc.ts` re-exports the `_Serialize` shapes under short names and holds the hand-written command names and arguments.
 - `src/lib/state.svelte.ts` is a single rune store fed by events.
-- Screens live in `src/routes/`. Styling is plain CSS tokens in `src/styles/app.css` plus scoped component styles. There's no Tailwind.
+- Screens live in `src/routes/`, shared parts in `src/components/` (`Icon`, `Mark`, `ConfirmButton`; use the latter instead of `window.confirm`). Styling is plain CSS tokens in `src/styles/app.css` plus scoped component styles. There's no Tailwind. The look is deliberately quiet: ink on a sage-tinted ground, 1px borders instead of shadows, a near-black primary button, and colour only on data (`--data` green for the activity calendar and "on" states, `--live` red while recording).
+- `vite dev` in a plain browser (no Tauri) serves sample data from `src/lib/mock.ts`. It's imported only behind `import.meta.env.DEV`, so it's never bundled. Open a screen directly with `http://127.0.0.1:1430/main.html#notes`.
 
 ## Status and known gaps
 
 - The Windows module (`platform/windows/`) is ported from v1 but has **not been compiled**. A macOS cross-check needs the MSVC SDK headers (for example via `cargo-xwin`). Build and test it on Windows before relying on it.
-- Not yet built: UI Automation selected-text on Windows, reading edited fields back for learning (only History edits are learned today), Notes (long recording) mode, updater, and `tauri-specta` generated bindings.
+- Not yet built: UI Automation on Windows (selected text and field read-back). Commands are still invoked by name in `ipc.ts` (only the data types are generated).
+- Warm mic (`keep_mic_warm`, off by default): the audio thread keeps the cpal stream open between dictations, and the callback fills a 700 ms `preroll` ring that a new recording starts with. The stream is reopened if it errored, the chosen device changed, or (for "System default") the default input changed. `AppState::apply_microphone` applies the setting at startup and on save.
+- Rewrite from History (`history_restyle` → `controller::restyle`): starts from the stored `raw` Whisper text, runs the normal clean → polish (with `styles::configure` for the chosen style) → dictionary → `Style::finish` path, and saves in place. AI errors are reported, not hidden.
+- Updates (`updater.rs`, `tauri-plugin-updater`): release builds check `https://github.com/iMohammedArsh/wispher-sh/releases/latest/download/latest.json` 30 s after launch and every 6 h (`check_updates`), and emit `update-available`. Install happens only on click, then the app restarts. The public key is in `tauri.conf.json`; the private key is `~/.tauri/hams.key` (never in the repo; losing it means existing installs can't update). `install-macos.sh` signs update archives when the key exists and skips them otherwise.
+- Notes chunk cuts (`dsp::take_chunk` / `quiet_split`) look for the quietest ~200 ms stretch, not one frame, so a silent stop consonant inside a word isn't chosen. `stt::strip_stock_phrases` drops subtitle hallucinations ("Thanks for watching") per sentence; short phrases like "Thank you." are only dropped when they're the whole transcript.
+- Notes mode (`Kind::Note`, `Input::Note`, from the Notes screen or the tray): `spawn_note_chunks` drains about 30 s of audio at a time (`AudioRecorder::drain` cuts at a pause via `dsp::quiet_split`), transcribes each chunk while recording continues and emits `note-progress`. `process_note` adds the tail, asks the AI for a title and key points (`Task::Summarize`, 60 s minimum timeout, skipped under 30 words), saves to the `notes` table (migration v2) and never pastes. Escape and the dictation shortcuts don't touch a note in progress.
+- Learning from fields (`learn_from_fields`, opt-in, macOS only): after a paste, `spawn_field_learning` re-reads the focused field through `Desktop::field_text` (AX, skips secure fields) every 5 s for a minute. Once the text settles, `text::learn_from_field` only learns from edits *inside* the pasted text and adds suggestions, never replacements. The field text isn't stored.
 - Styles: `styles::resolve` applies `Settings.app_rules` (case-insensitive match on bundle id/exe or app name) before `detect`, then `style_overrides` (prompt and AI on/off; the UI stores only differences from the built-ins).
 - Live preview (`live_preview`, off by default): `spawn_preview` in the controller re-transcribes the last 20 s every second and emits `partial` to the overlay. It's display-only. Its task is aborted with the recording, but an in-flight Whisper call can delay the final transcription by one preview pass.
 - App lifecycle: `tauri-plugin-single-instance` (must stay the first plugin) and `tauri-plugin-autostart` (LaunchAgent with `--hidden`, which starts in the menu bar). On macOS the Dock icon is shown only while the main window is open.
