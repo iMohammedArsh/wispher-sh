@@ -90,7 +90,8 @@
     display: flex; align-items: center; justify-content: center; gap: 10px;
     padding: 0 7px; border-radius: 999px;
     background: rgba(20, 22, 20, 0.94); color: #f2f4f2;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.26), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    /* The window leaves only 4px around the pill: a wider shadow gets cut off at its edge and shows as a grey box. */
+    box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.2), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
     -webkit-user-select: none; user-select: none; cursor: default;
   }
   .pill.idle { display: none; }
@@ -100,7 +101,7 @@
     display: flex; flex-direction: column; justify-content: flex-end;
     padding: 8px 14px; border-radius: 14px; overflow: hidden;
     background: rgba(20, 22, 20, 0.9); color: #f2f4f2;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.2), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
     -webkit-user-select: none; user-select: none;
   }
   .caption p { margin: 0; font-size: 13px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
