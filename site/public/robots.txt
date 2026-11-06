@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://hams.wusla.co/sitemap.xml

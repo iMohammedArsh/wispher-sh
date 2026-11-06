@@ -26,50 +26,57 @@ fi
 
 version=$(node -p 'require("./src-tauri/tauri.conf.json").version')
 tag="v$version"
-case "$(uname -m)" in
-  arm64) target="darwin-aarch64" ;;
-  x86_64) target="darwin-x86_64" ;;
-  *) echo "Unsupported architecture $(uname -m)" >&2; exit 1 ;;
-esac
+# One universal build (Apple Silicon + Intel) serves both updater platforms.
+rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null
+commit=$(git rev-parse HEAD)
+# The tag is made on GitHub from this commit, so it has to be there already.
+if ! git branch -r --contains "$commit" 2>/dev/null | grep -q .; then
+  echo "Commit $commit isn't pushed. Push the branch first (git push -u origin $(git branch --show-current))." >&2
+  exit 1
+fi
 if gh release view "$tag" --repo "$REPO" >/dev/null 2>&1; then
   echo "Release $tag already exists. Bump the version first." >&2
   exit 1
 fi
 
-echo "==> Building Hams $version for $target (signed with: ${APPLE_SIGNING_IDENTITY:-ad-hoc})"
+echo "==> Building Hams $version, universal (signed with: ${APPLE_SIGNING_IDENTITY:-ad-hoc})"
 npm ci --silent
-npm run tauri build -- --bundles app,dmg
+npm run tauri build -- --target universal-apple-darwin --bundles app,dmg
 
-bundle="src-tauri/target/release/bundle"
+bundle="src-tauri/target/universal-apple-darwin/release/bundle"
 archive="$bundle/macos/Hams.app.tar.gz"
 [[ -f "$archive" && -f "$archive.sig" ]] || { echo "Update archive or signature missing in $bundle/macos" >&2; exit 1; }
 dmg=$(ls "$bundle"/dmg/*.dmg | head -1)
 
-out="src-tauri/target/release/update"
+out="src-tauri/target/universal-apple-darwin/release/update"
 rm -rf "$out" && mkdir -p "$out"
-asset="Hams_${version}_${target}.app.tar.gz"
+asset="Hams_${version}_universal.app.tar.gz"
 cp "$archive" "$out/$asset"
+# A copy under a fixed name, so releases/latest/download/Hams-macOS.dmg (the website's
+# download button) always points at the newest DMG.
+cp "$dmg" "$out/Hams-macOS.dmg"
+# The website's one-line install: curl …/releases/latest/download/install.sh | bash
+cp scripts/install.sh "$out/install.sh"
 notes=$(git log -1 --pretty=%s)
 node -e '
-  const [version, target, asset, sigPath, repo, tag, notes, outPath] = process.argv.slice(1);
+  const [version, asset, sigPath, repo, tag, notes, outPath] = process.argv.slice(1);
   const fs = require("fs");
+  const entry = {
+    signature: fs.readFileSync(sigPath, "utf8").trim(),
+    url: `https://github.com/${repo}/releases/download/${tag}/${asset}`,
+  };
   const manifest = {
     version,
     notes,
     pub_date: new Date().toISOString(),
-    platforms: {
-      [target]: {
-        signature: fs.readFileSync(sigPath, "utf8").trim(),
-        url: `https://github.com/${repo}/releases/download/${tag}/${asset}`,
-      },
-    },
+    platforms: { "darwin-aarch64": entry, "darwin-x86_64": entry },
   };
   fs.writeFileSync(outPath, JSON.stringify(manifest, null, 2) + "\n");
-' "$version" "$target" "$asset" "$archive.sig" "$REPO" "$tag" "$notes" "$out/latest.json"
+' "$version" "$asset" "$archive.sig" "$REPO" "$tag" "$notes" "$out/latest.json"
 
-draft=(--draft)
-[[ "${1:-}" == "--publish" ]] && draft=()
-echo "==> Creating GitHub release $tag ${draft[*]:-(published)}"
-gh release create "$tag" --repo "$REPO" "${draft[@]}" --title "Hams $version" --notes "$notes" \
-  "$out/$asset" "$out/latest.json" "$dmg"
+draft="--draft"
+[[ "${1:-}" == "--publish" ]] && draft="--draft=false"
+echo "==> Creating GitHub release $tag ($draft)"
+gh release create "$tag" --repo "$REPO" "$draft" --target "$commit" --title "Hams $version" --notes "$notes" \
+  "$out/$asset" "$out/latest.json" "$dmg" "$out/Hams-macOS.dmg" "$out/install.sh"
 echo "==> Done. Installed copies check $tag's latest.json once it's published (not while it's a draft)."

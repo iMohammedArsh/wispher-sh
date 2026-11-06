@@ -26,7 +26,8 @@ HAMS_TEST_WAV=/tmp/hams.wav cargo test --release real_speech -- --ignored --noca
 # Notes chunking on real speech: a 45 s+ WAV (`say -f notes.txt -o /tmp/note.wav ...`) as HAMS_TEST_NOTE_WAV
 cargo test bindings               # regenerates src/lib/bindings.ts; fails once if it was out of date
 scripts/install-macos.sh          # release build → /Applications (signs with "Hams Local Signing" if present)
-scripts/release-macos.sh          # signed build + draft GitHub Release with latest.json (see Updates below)
+scripts/release-macos.sh          # universal signed build + draft GitHub Release (see Updates below)
+npm run site:dev                  # landing page (site/, Vite port 1431); site:build prerenders to site/dist
 scripts/build-icon.sh             # regenerate all icons from icons/source + Hams.icon (needs Xcode's actool)
 ```
 
@@ -94,4 +95,6 @@ The npm `tauri` script prepends Homebrew rustup to `PATH`. Do the same in a shel
 - Live preview (`live_preview`, off by default): `spawn_preview` in the controller re-transcribes the last 20 s every second and emits `partial` to the overlay. It's display-only. Its task is aborted with the recording, but an in-flight Whisper call can delay the final transcription by one preview pass.
 - App lifecycle: `tauri-plugin-single-instance` (must stay the first plugin) and `tauri-plugin-autostart` (LaunchAgent with `--hidden`, which starts in the menu bar). On macOS the Dock icon is shown only while the main window is open.
 - Icons: `icons/Hams.icon` (Icon Composer) → `icons/macos/Assets.car`, which is bundled as a resource with `CFBundleIconName` = `Hams` in `Info.plist`. The tray uses `icons/tray/tray-template@2x.png` as a template image.
+- Distribution without an Apple Developer ID: builds are ad-hoc (or "Hams Local Signing") signed, so Gatekeeper warns on a browser-downloaded DMG ("Open Anyway" in Privacy & Security). `scripts/install.sh` (uploaded as a release asset; the site's `curl … | bash` line) fetches `Hams-macOS.dmg` with curl, which sets no quarantine flag, and copies the app into /Applications. In-app updates aren't quarantined either. `release-macos.sh` builds `universal-apple-darwin`, writes the same archive for `darwin-aarch64` and `darwin-x86_64` in latest.json, and tags the pushed HEAD commit.
+- Landing page (`site/`): its own Vite root with Svelte 5, prerendered at build time (`svelte/server` → `site/prerender.mjs`) and hydrated. It reuses the app's `HeardWritten.svelte` and `lib/diff.ts`; `site/src/lib/clean.ts` is a TypeScript port of `text::clean` for the "Type it" box, with the Rust test cases mirrored in `clean.test.ts`. All copy is in `site/src/lib/content.ts`. Hosted at hams.wusla.co on Cloudflare Pages (DNS for wusla.co is on Cloudflare). `site/public/_redirects` maps `/download` and `/install` to the newest release's `Hams-macOS.dmg` and `install.sh`. `/privacy/` is the Android app's policy (Play Store link, keep that URL and its text); `/privacy/mac/` is the Mac app's.
 - The design specs in `docs/superpowers/` describe v1 but still record the product intent: privacy, overlay behaviour, formatting rules and Malayalam support.

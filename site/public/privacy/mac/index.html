@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="How Hams for Mac handles your voice, text and settings." />
+    <meta name="theme-color" content="#090a0c" />
+    <title>Hams for Mac Privacy Policy</title>
+    <link rel="canonical" href="https://hams.wusla.co/privacy/mac/" />
+    <link rel="icon" href="/img/icon.png" />
+    <link rel="stylesheet" href="/privacy/policy.css" />
+  </head>
+  <body>
+    <header class="nav">
+      <a class="brand" href="/" aria-label="Hams home"><span class="brand-mark" aria-hidden="true"></span>Hams</a>
+      <a class="nav-link active" href="/privacy/mac/">Privacy</a>
+    </header>
+    <main class="policy">
+      <p class="eyebrow">HAMS FOR MAC · LEGAL</p>
+      <h1>Privacy Policy</h1>
+      <p class="effective">Effective: 6 November 2026</p>
+      <p class="lede">This policy explains how Wusla (“we”, “us”) handles information when you use Hams for Mac, our voice typing app for macOS. For the Android keyboard, see the <a href="/privacy/">Hams for Android privacy policy</a>.</p>
+
+      <section><h2>1. Your voice stays on your Mac</h2><p>Hams turns speech into text with Whisper, a speech model that runs inside the app on your Mac. Your audio is never uploaded, and it isn’t saved to a file. It is held in memory only while Hams transcribes it, then discarded.</p><p>Hams listens only while you hold or toggle the dictation shortcut, or while you record a voice note. If you turn on <em>Keep the microphone ready</em>, the microphone stays open between dictations so the first words aren’t cut off. Hams then keeps only the last second of sound in memory, overwriting it continuously, and uses it as the start of your next dictation. Nothing is transcribed until you dictate, and macOS shows its microphone indicator the whole time.</p></section>
+
+      <section><h2>2. What Hams keeps on your Mac</h2><p>Your dictation history (what was heard and what was written, with the app and time), voice notes, your dictionary, snippets and settings are stored in a database in Hams’ folder on your Mac. They never leave it. You can delete single entries or clear all history inside Hams, and uninstalling Hams together with its folder removes everything.</p><p>API keys for AI polish are stored in the macOS keychain, not in Hams’ files.</p></section>
+
+      <section><h2>3. Permissions</h2><p><strong>Microphone</strong>, to hear you. <strong>Accessibility</strong>, so the shortcut works in every app, Hams can paste at your cursor, and it can read text you’ve selected when you ask it to rewrite that text.</p><p>If you turn on <em>Learn from edits in other apps</em> (off by default), Hams re-reads the text field you dictated into for up to a minute after a paste, to notice words you corrected. It skips password fields, learns only from changes inside the text it pasted, and doesn’t store the field’s contents.</p></section>
+
+      <section><h2>4. Optional AI polish</h2><p>AI polish is off unless you turn it on. When it’s on, the written text of a dictation (never the audio), the text you ask Hams to rewrite, and voice-note transcripts for their summaries are sent over HTTPS to the provider you choose: Google Gemini, OpenAI, Anthropic, Groq, OpenRouter, or a custom service you configure. Requests use your own API key and go straight from your Mac to that provider; Wusla never receives them. The provider’s own privacy policy applies to what you send it. If you use Ollama, polish runs on your own computer and nothing is sent anywhere.</p></section>
+
+      <section><h2>5. Other network requests</h2><p>Hams downloads its speech model once from Hugging Face. It checks GitHub for a new version shortly after launch and every few hours, and installs one only when you click. Like any web request, these reach those services with your IP address. Hams contains no analytics, tracking or advertising code.</p></section>
+
+      <section><h2>6. Accounts and sharing</h2><p>Hams for Mac has no account and we don’t collect any personal information through it. We don’t sell information, and the app shares text only with the AI provider you chose, as described above.</p></section>
+
+      <section><h2>7. This website</h2><p>hams.wusla.co is served through Cloudflare, which processes visitors’ IP addresses to deliver the page and protect it from abuse. The page sets no cookies of its own. It loads its typefaces from Google Fonts and Fontshare, which receive your IP address when they send the fonts.</p></section>
+
+      <section><h2>8. Children</h2><p>Hams is not directed to children under the age where parental consent is required in their jurisdiction. If you believe a child has provided personal information through Hams, contact us so we can review the issue.</p></section>
+
+      <section><h2>9. Changes to this policy</h2><p>We may update this policy as Hams evolves. We will publish the new version on this page and update the effective date.</p></section>
+
+      <section><h2>10. Contact</h2><p>For privacy questions or requests, email <a href="mailto:wuslateam@gmail.com">wuslateam@gmail.com</a>.</p></section>
+    </main>
+    <footer><span>© 2026 Wusla</span><a href="/">Hams</a><a href="/privacy/">Android privacy</a><a href="mailto:wuslateam@gmail.com">Contact</a></footer>
+  </body>
+</html>

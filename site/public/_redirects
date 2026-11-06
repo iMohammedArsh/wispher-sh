@@ -1,0 +1,5 @@
+# Cloudflare Pages: short links on hams.wusla.co for the newest GitHub release.
+/download    https://github.com/iMohammedArsh/wispher-sh/releases/latest/download/Hams-macOS.dmg  302
+/install     https://github.com/iMohammedArsh/wispher-sh/releases/latest/download/install.sh      302
+/install.sh  https://github.com/iMohammedArsh/wispher-sh/releases/latest/download/install.sh      302
+/github      https://github.com/iMohammedArsh/wispher-sh  302

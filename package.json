@@ -10,7 +10,10 @@
     "test": "vitest run",
     "tauri": "PATH=/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:$PATH tauri",
     "tauri:dev": "npm run tauri dev",
-    "tauri:build": "npm run tauri build"
+    "tauri:build": "npm run tauri build",
+    "site:dev": "vite --config site/vite.config.ts",
+    "site:build": "vite build --config site/vite.config.ts && vite build --config site/vite.config.ts --ssr src/entry-server.ts --outDir dist-ssr && node site/prerender.mjs",
+    "site:preview": "vite preview --config site/vite.config.ts --port 1432"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4"

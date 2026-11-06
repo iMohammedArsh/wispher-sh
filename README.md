@@ -14,7 +14,17 @@ Hams is a voice typer for macOS and Windows. Hold a shortcut in any app, speak, 
 - **Automatic updates.** Signed updates from GitHub Releases, installed only when you click Install.
 - **Searchable history and local stats.** Everything is stored in one SQLite file. API keys live in the OS keychain.
 
-## Installing on your Mac (the everyday way)
+## Getting Hams (for everyone)
+
+On any Mac with macOS 12 or later, Apple Silicon or Intel, paste this into Terminal:
+
+```bash
+curl -fsSL https://hams.wusla.co/install | bash
+```
+
+It downloads the newest DMG, copies Hams into Applications and opens it ([the script](scripts/install.sh)). Hams isn't registered with Apple, so if you download the DMG in a browser instead, macOS refuses to open it the first time: go to System Settings → Privacy & Security, scroll down and click **Open Anyway**. Files fetched with curl aren't flagged that way, and neither are updates installed from inside Hams.
+
+## Installing from source on your own Mac
 
 ```bash
 scripts/create-signing-identity.sh   # once: a local signing certificate (asks for your password)
@@ -27,7 +37,17 @@ Turn on **Settings → General → Open Hams at login** to start Hams quietly in
 
 ## Publishing an update
 
-Bump the version in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `package.json`, commit, then run `scripts/release-macos.sh`. It builds a signed app, creates a draft GitHub Release with the update archive, `latest.json` and a DMG. Publish the draft and installed copies offer the update within a few hours (or right away from Settings → Updates → Check now). Updates are signed with `~/.tauri/hams.key`; keep a backup of it, because installs can't be updated without it.
+Bump the version in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `package.json`, commit, then run `scripts/release-macos.sh`. The branch has to be pushed first, because the release tag is made from that commit. It builds one universal app (Apple Silicon and Intel) and creates a draft GitHub Release with the update archive, `latest.json` (both architectures), the DMG, a fixed-name `Hams-macOS.dmg` for the website and `install.sh`. Publish the draft and installed copies offer the update within a few hours (or right away from Settings → Updates → Check now). Updates are signed with `~/.tauri/hams.key`; keep a backup of it, because installs can't be updated without it.
+
+## Website
+
+`site/` is the landing page, built with Svelte and Vite: `npm run site:dev` to work on it, `npm run site:build` for a static, prerendered copy in `site/dist`.
+
+It's served at **https://hams.wusla.co** by Cloudflare Pages, connected to this repository:
+
+- Build command `npm ci && npm run site:build`, output directory `site/dist`, environment variable `NODE_VERSION=22`.
+- `site/public/_redirects` gives the site short links to the newest release: `/download` (the DMG) and `/install` (the install script), so the page and the Terminal line never change between versions.
+- `/privacy/` is the Hams for Android privacy policy, kept at its old address for the Play Store listing. `/privacy/mac/` covers the Mac app.
 
 ## App icon
 

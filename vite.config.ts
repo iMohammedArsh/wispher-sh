@@ -10,7 +10,7 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 1430,
     strictPort: true,
-    watch: { ignored: ["**/src-tauri/**"] },
+    watch: { ignored: ["**/src-tauri/**", "**/site/**"] },
   },
   build: {
     target: "safari15",
@@ -22,6 +22,6 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "site/src/**/*.test.ts"],
   },
 });
