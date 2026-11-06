@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
-use crate::controller::{Kind, Phase, Status};
+use crate::controller::{Phase, Status};
 
 pub const LABEL: &str = "overlay";
 
@@ -34,16 +34,15 @@ pub fn create(app: &AppHandle) {
     }
 }
 
+/// The pill keeps one size through recording, working and done, so it never
+/// jumps between phases. The live caption and errors need more room.
+const PILL: (f64, f64) = (232.0, 48.0);
+
 fn size_for(status: &Status) -> Option<(f64, f64)> {
     match status.phase {
         Phase::Idle => None,
         Phase::Recording if status.preview => Some((440.0, 112.0)),
-        Phase::Recording if status.kind == Kind::Note => Some((236.0, 48.0)),
-        Phase::Recording => Some((212.0, 48.0)),
-        Phase::Transcribing | Phase::Polishing | Phase::Delivering | Phase::Done if status.kind == Kind::Note => {
-            Some((200.0, 48.0))
-        }
-        Phase::Transcribing | Phase::Polishing | Phase::Delivering | Phase::Done => Some((180.0, 48.0)),
+        Phase::Recording | Phase::Transcribing | Phase::Polishing | Phase::Delivering | Phase::Done => Some(PILL),
         Phase::Error => Some((380.0, 64.0)),
     }
 }

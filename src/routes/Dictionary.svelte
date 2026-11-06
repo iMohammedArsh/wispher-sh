@@ -54,16 +54,16 @@
   {#if suggestions.length}
     <section aria-labelledby="suggest-title">
       <div class="section-head">
-        <h2 id="suggest-title">Waiting for you <span class="pill warn">{suggestions.length}</span></h2>
+        <h2 id="suggest-title">Waiting for you <span class="count num">{suggestions.length}</span></h2>
         <span class="aside">Learned from your corrections. Nothing changes until you add it.</span>
       </div>
       <ul class="panel flush rows">
         {#each suggestions as s (s.id)}
           <li class="pair">
-            <span class="heard">{s.heard}</span>
+            <span class="said"><span class="tag">Heard</span><span class="was">{s.heard}</span></span>
             <Icon name="chevron" size={14} />
-            <strong class="grow">{s.correct}</strong>
-            <span class="small muted num">{s.count === 1 ? "seen once" : `seen ${s.count} times`}</span>
+            <span class="said grow"><span class="tag">Write</span><span class="fix">{s.correct}</span></span>
+            <span class="small muted num">{s.count === 1 ? "Seen once" : `Seen ${s.count} times`}</span>
             <button class="small" onclick={() => resolve(s, false)}>Dismiss</button>
             <button class="small primary" onclick={() => resolve(s, true)}>Add</button>
           </li>
@@ -103,8 +103,8 @@
         <tbody>
           {#each shown as e (e.id)}
             <tr>
-              <td class={e.replacement ? "muted" : ""}>{e.term}</td>
-              <td><strong>{e.replacement ?? e.term}</strong></td>
+              <td class="muted">{e.term}</td>
+              <td>{#if e.replacement}<span class="fix">{e.replacement}</span>{:else}<span class="muted">Spelled as is</span>{/if}</td>
               <td class="small muted">{sourceLabel[e.source] ?? e.source}</td>
               <td class="end">
                 <button class="ghost small" aria-label="Remove {e.term}" title="Remove" onclick={() => app.run(async () => { await api.dictionaryDelete(e.id); await load(); })}><Icon name="trash" size={15} /></button>
@@ -121,7 +121,11 @@
   .narrow { max-width: 820px; }
   .pair { display: flex; align-items: center; gap: 10px; }
   .pair :global(.icon) { color: var(--faint); }
-  .heard { color: var(--muted); }
+  .count { font-weight: 400; color: var(--muted); margin-left: 4px; }
+  .said { display: inline-flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .tag { font-size: 12px; color: var(--muted); }
+  .was { color: var(--faint); text-decoration: line-through; text-decoration-color: var(--faint); }
+  .fix { color: var(--text); font-weight: 500; text-decoration: underline; text-decoration-thickness: 2px; text-decoration-color: var(--data); text-underline-offset: 4px; }
   .add { display: flex; gap: 12px; align-items: flex-end; padding: 16px var(--pad); }
   .filter { width: 200px; min-height: 30px; }
   table { width: 100%; border-collapse: separate; border-spacing: 0; overflow: hidden; }
@@ -130,5 +134,4 @@
   th:first-child, td:first-child { width: 34%; }
   td.end { text-align: right; width: 56px; padding-right: 12px; }
   .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-  h2 .pill { vertical-align: 2px; margin-left: 4px; }
 </style>

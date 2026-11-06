@@ -46,7 +46,7 @@
       <input type="text" bind:value={trigger} placeholder="my address" />
     </label>
     <label class="field">
-      <span>Type this</span>
+      <span>Insert this</span>
       <textarea bind:value={expansion} rows="3" placeholder="221B Baker Street, London NW1 6XE"></textarea>
     </label>
     <div class="row end">
@@ -86,7 +86,7 @@
   .form { display: flex; flex-direction: column; gap: 16px; }
   .end { justify-content: flex-end; }
   li { display: grid; grid-template-columns: minmax(140px, 220px) 1fr auto; gap: 16px; align-items: start; }
-  .trigger { font-weight: 600; }
+  .trigger { font-weight: 500; }
   .expansion { color: var(--muted); white-space: pre-wrap; }
   .tools { display: flex; margin: -3px 0; }
   .tools :global(button) { width: 28px; padding: 0; }

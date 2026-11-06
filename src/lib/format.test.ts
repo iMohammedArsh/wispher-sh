@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calendarWeeks, compactNumber, duration, lengthLabel, relativeTime, shortcutLabel, timeParts } from "./format";
+import { calendarWeeks, compactNumber, duration, lastDays, lengthLabel, niceCeiling, relativeTime, shortcutLabel, timeParts } from "./format";
 
 describe("shortcutLabel", () => {
   it("uses symbols on macOS", () => {
@@ -49,5 +49,24 @@ describe("durations", () => {
     expect(timeParts(312)).toEqual([[5, "h"], [12, "m"]]);
     expect(lengthLabel(23 * 60_000)).toBe("23 min");
     expect(lengthLabel(64 * 60_000)).toBe("1 h 4 min");
+  });
+});
+
+describe("week strip", () => {
+  it("lists the last days oldest first, with zeros for quiet days", () => {
+    const now = new Date(2026, 10, 6, 15);
+    const days = lastDays([["2026-11-06", 87], ["2026-11-04", 300]], 7, now);
+    expect(days).toHaveLength(7);
+    expect(days[6]).toMatchObject({ words: 87, isToday: true });
+    expect(days[4].words).toBe(300);
+    expect(days[5].words).toBe(0);
+    expect(days[0].date.getDate()).toBe(31);
+  });
+
+  it("rounds the axis top up to a readable number", () => {
+    expect(niceCeiling(0)).toBe(100);
+    expect(niceCeiling(870)).toBe(1000);
+    expect(niceCeiling(1340)).toBe(1500);
+    expect(niceCeiling(200)).toBe(200);
   });
 });

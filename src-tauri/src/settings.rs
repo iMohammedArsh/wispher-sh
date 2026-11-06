@@ -109,6 +109,9 @@ pub struct Settings {
     pub keep_mic_warm: bool,
     /// "auto", or a Whisper language code such as "en" or "ml".
     pub language: String,
+    /// With "auto": the languages detection may choose from, main language
+    /// first (used when detection is unsure). Empty means any language.
+    pub languages: Vec<String>,
     /// Model id from the catalog in `stt::models`.
     pub model: String,
     pub delivery: DeliveryMode,
@@ -141,6 +144,7 @@ impl Default for Settings {
             microphone: None,
             keep_mic_warm: false,
             language: "auto".into(),
+            languages: Vec::new(),
             model: "small".into(),
             delivery: DeliveryMode::PasteRestore,
             remove_fillers: true,
@@ -181,6 +185,9 @@ impl Settings {
         }
         if self.app_rules.iter().any(|r| r.app.trim().is_empty()) {
             return Err(AppError::Settings("Each app rule needs an app name.".into()));
+        }
+        if self.languages.len() > 12 || self.languages.iter().any(|l| l.trim().is_empty() || l == "auto" || l.len() > 8) {
+            return Err(AppError::Settings("Pick up to 12 languages from the list.".into()));
         }
         if self.ai.timeout_ms < 1_000 || self.ai.timeout_ms > 60_000 {
             return Err(AppError::Settings("AI timeout must be between 1 and 60 seconds.".into()));

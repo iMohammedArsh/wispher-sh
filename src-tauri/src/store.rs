@@ -97,6 +97,9 @@ pub struct HistoryItem {
     pub id: i64,
     pub created_at: i64,
     pub text: String,
+    /// What Whisper heard, before clean-up, polish and dictionary fixes.
+    /// The same as `text` for rows saved before it was recorded.
+    pub raw: String,
     pub app: String,
     pub style: String,
     pub delivery: String,
@@ -243,38 +246,45 @@ impl Store {
 
     /// Newest first. `query` uses SQLite full-text search (prefix match on each word).
     pub fn history(&self, query: &str, limit: i64) -> AppResult<Vec<HistoryItem>> {
-        let conn = self.conn.lock();
-        let map = |r: &rusqlite::Row| -> rusqlite::Result<HistoryItem> {
-            Ok(HistoryItem {
-                id: r.get(0)?,
-                created_at: r.get(1)?,
-                text: r.get(2)?,
-                app: r.get(3)?,
-                style: r.get(4)?,
-                delivery: r.get(5)?,
-                duration_ms: r.get(6)?,
-                words: r.get(7)?,
-                pinned: r.get::<_, i64>(8)? != 0,
-            })
-        };
-        const COLUMNS: &str = "h.id, h.created_at, h.text, h.app, h.style, h.delivery, h.duration_ms, h.words, h.pinned";
         let fts_query = fts_prefix_query(query);
-        let rows = if fts_query.is_empty() {
-            let mut stmt = conn.prepare(&format!(
-                "SELECT {COLUMNS} FROM history h ORDER BY h.pinned DESC, h.created_at DESC LIMIT ?1"
-            ))?;
-            let rows = stmt.query_map([limit], map)?.collect::<Result<Vec<_>, _>>()?;
-            rows
+        if fts_query.is_empty() {
+            self.history_rows("ORDER BY h.pinned DESC, h.created_at DESC LIMIT ?1", params![limit])
         } else {
-            let mut stmt = conn.prepare(&format!(
-                "SELECT {COLUMNS} FROM history_fts f JOIN history h ON h.id = f.rowid
-                 WHERE history_fts MATCH ?1 ORDER BY h.created_at DESC LIMIT ?2"
-            ))?;
-            let rows = stmt
-                .query_map(params![fts_query, limit], map)?
-                .collect::<Result<Vec<_>, _>>()?;
-            rows
-        };
+            self.history_rows(
+                "JOIN history_fts f ON h.id = f.rowid WHERE history_fts MATCH ?1 ORDER BY h.created_at DESC LIMIT ?2",
+                params![fts_query, limit],
+            )
+        }
+    }
+
+    /// The newest dictations, pinned or not.
+    pub fn recent_history(&self, limit: i64) -> AppResult<Vec<HistoryItem>> {
+        self.history_rows("ORDER BY h.created_at DESC LIMIT ?1", params![limit])
+    }
+
+    fn history_rows(&self, tail: &str, args: impl rusqlite::Params) -> AppResult<Vec<HistoryItem>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT h.id, h.created_at, h.text, CASE WHEN h.raw = '' THEN h.text ELSE h.raw END,
+                    h.app, h.style, h.delivery, h.duration_ms, h.words, h.pinned
+             FROM history h {tail}"
+        ))?;
+        let rows = stmt
+            .query_map(args, |r| {
+                Ok(HistoryItem {
+                    id: r.get(0)?,
+                    created_at: r.get(1)?,
+                    text: r.get(2)?,
+                    raw: r.get(3)?,
+                    app: r.get(4)?,
+                    style: r.get(5)?,
+                    delivery: r.get(6)?,
+                    duration_ms: r.get(7)?,
+                    words: r.get(8)?,
+                    pinned: r.get::<_, i64>(9)? != 0,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
 
@@ -637,6 +647,25 @@ mod tests {
         assert!(store.history("", 10).unwrap()[0].pinned);
         store.delete_history(id).unwrap();
         assert_eq!(store.history("", 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn recent_history_is_newest_first_and_carries_what_was_heard() {
+        let store = Store::open_in_memory().unwrap();
+        let old = store
+            .add_history_at(&NewHistory { text: "Older one.", ..Default::default() }, 1_000)
+            .unwrap();
+        store
+            .add_history_at(&NewHistory { text: "See you on Tauri.", raw: "um see you on tory", ..Default::default() }, 2_000)
+            .unwrap();
+        store.set_pinned(old, true).unwrap();
+        // The History list puts pins first; Home wants the newest dictation.
+        assert_eq!(store.history("", 10).unwrap()[0].id, old);
+        let recent = store.recent_history(10).unwrap();
+        assert_eq!(recent[0].raw, "um see you on tory");
+        assert_eq!(recent[0].text, "See you on Tauri.");
+        // Rows saved without a transcript fall back to their text.
+        assert_eq!(recent[1].raw, "Older one.");
     }
 
     #[test]

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use parking_lot::Mutex;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState};
 
-use super::{models, strip_stock_phrases, sanitize, vocabulary_prompt, SttRequest, Transcriber};
+use super::{models, pick_language, strip_stock_phrases, sanitize, vocabulary_prompt, SttRequest, Transcriber};
 use crate::error::{AppError, AppResult};
 
 struct Loaded {
@@ -50,14 +50,45 @@ impl WhisperEngine {
     }
 }
 
+fn threads() -> usize {
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 8)
+}
+
+/// Whisper's language scores for the first 30 s of `samples`, narrowed to the
+/// allowed languages by [`pick_language`]. "auto" if detection fails.
+fn detect_language(loaded: &mut Loaded, samples: &[f32], allowed: &[String]) -> String {
+    let window = &samples[..samples.len().min(30 * 16_000)];
+    let detected = loaded.state.pcm_to_mel(window, threads()).and_then(|()| loaded.state.lang_detect(0, threads()));
+    match detected {
+        Ok((_, probs)) => {
+            let scores: Vec<(&str, f32)> = probs
+                .iter()
+                .enumerate()
+                .filter_map(|(id, p)| whisper_rs::get_lang_str(id as i32).map(|code| (code, *p)))
+                .collect();
+            let chosen = pick_language(&scores, allowed);
+            let best = scores.iter().max_by(|a, b| a.1.total_cmp(&b.1));
+            tracing::debug!("Language: Whisper's best guess {best:?}, allowed {allowed:?}, using {chosen}");
+            chosen
+        }
+        Err(error) => {
+            tracing::warn!("Language detection failed: {error}");
+            "auto".into()
+        }
+    }
+}
+
+fn is_auto(language: &str) -> bool {
+    language.is_empty() || language == "auto"
+}
+
 impl Transcriber for WhisperEngine {
     fn transcribe(&self, samples: &[f32], request: &SttRequest) -> AppResult<String> {
         let mut slot = self.loaded.lock();
         let loaded = self.ensure_loaded(&mut slot, &request.model)?;
 
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 8);
-        params.set_n_threads(threads as i32);
+        params.set_n_threads(threads() as i32);
         params.set_translate(false);
         params.set_no_context(true);
         params.set_no_timestamps(true);
@@ -68,8 +99,16 @@ impl Transcriber for WhisperEngine {
         params.set_suppress_blank(true);
         params.set_suppress_nst(true);
         params.set_temperature(0.0);
-        let language = if request.language.is_empty() { "auto" } else { request.language.as_str() };
-        params.set_language(Some(language));
+        // With a list of allowed languages, detect here and narrow the guess to
+        // that list; otherwise let Whisper detect on its own.
+        let language = if !is_auto(&request.language) {
+            request.language.clone()
+        } else if request.languages.iter().any(|l| !is_auto(l)) {
+            detect_language(loaded, samples, &request.languages)
+        } else {
+            "auto".into()
+        };
+        params.set_language(Some(&language));
         let prompt = vocabulary_prompt(&request.vocabulary);
         if !prompt.is_empty() {
             params.set_initial_prompt(&prompt);
@@ -102,8 +141,19 @@ impl Transcriber for WhisperEngine {
         Ok(sanitize(&text))
     }
 
+    fn resolve_language(&self, samples: &[f32], request: &SttRequest) -> String {
+        if !is_auto(&request.language) {
+            return request.language.clone();
+        }
+        let mut slot = self.loaded.lock();
+        match self.ensure_loaded(&mut slot, &request.model) {
+            Ok(loaded) => detect_language(loaded, samples, &request.languages),
+            Err(_) => "auto".into(),
+        }
+    }
+
     fn warm_up(&self, model: &str) {
-        let request = SttRequest { language: "en".into(), model: model.into(), vocabulary: Vec::new() };
+        let request = SttRequest { language: "en".into(), model: model.into(), ..SttRequest::default() };
         // One second of near-silence compiles GPU kernels so the first real dictation is fast.
         let silence = vec![0.0_f32; 16_000];
         match self.transcribe(&silence, &request) {
@@ -153,13 +203,34 @@ mod tests {
         let captured = crate::audio::dsp::prepare(&raw, rate);
         assert!(captured.has_speech);
         let engine = WhisperEngine::new();
-        let request = SttRequest { language: "en".into(), model, vocabulary: vec!["Hams".into()] };
+        let request = SttRequest { language: "en".into(), model, vocabulary: vec!["Hams".into()], ..SttRequest::default() };
         engine.transcribe(&captured.samples[..16_000], &request).ok(); // warm-up
         let started = std::time::Instant::now();
         let text = engine.transcribe(&captured.samples, &request).unwrap();
         println!("{:?} in {:?}", text, started.elapsed());
         let lower = text.to_lowercase();
         assert!(lower.contains("hello") && lower.contains("dictation"), "got {text:?}");
+    }
+
+    /// Accented speech and the allowed-languages list. English read by the
+    /// macOS Malay voice is "English in a Malaysian accent":
+    /// `say -v Amira -o /tmp/accent.wav --data-format=LEI16@22050 "Today we talk about the constitution and the powers of the king."`
+    /// then `HAMS_TEST_ACCENT_WAV=/tmp/accent.wav cargo test --release real_speech_accent -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn real_speech_accent_stays_in_an_allowed_language() {
+        let path = std::env::var("HAMS_TEST_ACCENT_WAV").expect("set HAMS_TEST_ACCENT_WAV");
+        let model = std::env::var("HAMS_TEST_MODEL").unwrap_or_else(|_| "small".into());
+        let (raw, rate) = read_wav(&path);
+        let captured = crate::audio::dsp::prepare(&raw, rate);
+        let engine = WhisperEngine::new();
+        let any = SttRequest { language: "auto".into(), model: model.clone(), ..SttRequest::default() };
+        let mine = SttRequest { languages: vec!["en".into(), "ml".into()], ..any.clone() };
+        println!("any language: {} → {:?}", engine.resolve_language(&captured.samples, &any), engine.transcribe(&captured.samples, &any).unwrap());
+        let chosen = engine.resolve_language(&captured.samples, &mine);
+        let text = engine.transcribe(&captured.samples, &mine).unwrap();
+        println!("en or ml:     {chosen} → {text:?}");
+        assert_eq!(chosen, "en");
     }
 
     /// Notes mode end to end on real speech: stream a long recording into a
@@ -175,7 +246,7 @@ mod tests {
         let (raw, rate) = read_wav(&path);
         assert!(raw.len() > rate as usize * 45, "use a recording longer than 45 s");
         let engine = WhisperEngine::new();
-        let request = SttRequest { language: "en".into(), model: "small".into(), vocabulary: vec![] };
+        let request = SttRequest { language: "en".into(), model: "small".into(), ..SttRequest::default() };
         let transcribe = |samples: &[f32]| {
             let captured = dsp::prepare(samples, rate);
             if captured.has_speech { engine.transcribe(&captured.samples, &request).unwrap() } else { String::new() }

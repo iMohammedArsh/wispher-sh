@@ -6,9 +6,11 @@ import type { DictionaryEntry, HistoryItem, ModelStatus, Note, Settings, Setting
 const DAY = 86_400_000;
 const now = Date.now();
 const at = (daysAgo: number, hour: number, minute = 0) => {
+  // Today's rows are placed as if it were 11:00 now, so they never land in the future.
+  if (daysAgo === 0) return now - ((11 * 60) - (hour * 60 + minute)) * 60_000;
   const d = new Date(now - daysAgo * DAY);
   d.setHours(hour, minute, 0, 0);
-  return Math.min(d.getTime(), now - 60_000 * (daysAgo === 0 ? 3 : 0));
+  return d.getTime();
 };
 
 const settings: Settings = {
@@ -19,6 +21,7 @@ const settings: Settings = {
   microphone: null,
   keep_mic_warm: false,
   language: "auto",
+  languages: ["en", "ml"],
   model: "small",
   delivery: "paste_restore",
   remove_fillers: true,
@@ -31,25 +34,27 @@ const settings: Settings = {
   learn_from_fields: false,
   ai: { provider: "gemini", model: "", base_url: "", smart_skip_words: 4, timeout_ms: 6000 },
   check_updates: true,
-  onboarding_done: true,
+  // main.html?onboarding shows the setup flow; ?empty shows a first run with no history.
+  onboarding_done: !location.search.includes("onboarding"),
 };
 
-const rows: [number, number, number, string, string, string][] = [
-  [0, 10, 42, "Slack", "messaging", "Pushed the overlay fix, can you pull and check it on your Intel machine"],
-  [0, 10, 18, "Mail", "email", "Hi Priya,\n\nThanks for the notes from Tuesday. I've moved the launch review to Thursday at 3 so the design changes can land first. I'll send the build by Wednesday evening.\n\nBest,\nArsh"],
-  [0, 9, 55, "Cursor", "code", "rename handleSubmit to commitPrompt and keep the trailing debounce at 300 ms"],
-  [0, 9, 31, "Notion", "docs", "The live preview re-transcribes the last twenty seconds once a second. It's display only, so the pasted text still comes from a single pass over the whole recording."],
-  [1, 18, 4, "Messages", "messaging", "On my way, ten minutes"],
-  [1, 16, 47, "Linear", "docs", "Overlay sometimes appears on the wrong display when the cursor sits on the menu bar of the second monitor. Repro: two displays, cursor on the secondary menu bar, start a dictation."],
-  [1, 11, 12, "Slack", "messaging", "Can we move standup to 10:30 tomorrow"],
-  [2, 15, 20, "Mail", "email", "Hi team,\n\nThe Malayalam test set is in the shared drive. Small handles mixed speech well; base drops most of the English loanwords.\n\nArsh"],
-  [3, 14, 2, "Safari", "default", "best mechanical keyboard with low profile switches for mac"],
-  [4, 12, 40, "WhatsApp", "messaging", "Sounds good, see you at 7"],
+const rows: [number, number, number, string, string, string, string][] = [
+  [0, 10, 42, "Slack", "messaging", "Pushed the overlay fix, can you pull and check it on your Intel machine", "um pushed the overlay fix uh can you pull and check it on your intel machine"],
+  [0, 10, 18, "Mail", "email", "Hi Priya,\n\nThanks for the notes from Tuesday. I've moved the launch review to Thursday at 3 so the design changes can land first. I'll send the build by Wednesday evening.\n\nBest,\nArsh", "hi priya new paragraph thanks for the notes from tuesday i've moved the launch review to thursday at three so the design changes can land first i'll send the build by wednesday evening new paragraph best arsh"],
+  [0, 9, 55, "Cursor", "code", "rename handleSubmit to commitPrompt and keep the trailing debounce at 300 ms", "rename handle submit to commit prompt and keep the trailing debounce at 300 milliseconds"],
+  [0, 9, 31, "Notion", "docs", "The live preview re-transcribes the last twenty seconds once a second. It's display only, so the pasted text still comes from a single pass over the whole recording.", "so the live preview re transcribes the last twenty seconds once a second it's display only so the pasted text still comes from a single pass over the whole recording"],
+  [1, 18, 4, "Messages", "messaging", "On my way, ten minutes", "on my way ten minutes"],
+  [1, 16, 47, "Linear", "docs", "Overlay sometimes appears on the wrong display when the cursor sits on the menu bar of the second monitor. Repro: two displays, cursor on the secondary menu bar, start a dictation.", "overlay sometimes appears on the wrong display when the cursor sits on the menu bar of the second monitor repro two displays cursor on the secondary menu bar start a dictation"],
+  [1, 11, 12, "Slack", "messaging", "Can we move standup to 10:30 tomorrow", "can we move stand up to ten thirty tomorrow"],
+  [2, 15, 20, "Mail", "email", "Hi team,\n\nThe Malayalam test set is in the shared drive. Small handles mixed speech well; base drops most of the English loanwords.\n\nArsh", "hi team the malayalam test set is in the shared drive small handles mixed speech well base drops most of the english loan words arsh"],
+  [3, 14, 2, "Safari", "default", "best mechanical keyboard with low profile switches for mac", "best mechanical keyboard with low profile switches for mac"],
+  [4, 12, 40, "WhatsApp", "messaging", "Sounds good, see you at 7", "uh sounds good see you at seven"],
 ];
-let history: HistoryItem[] = rows.map(([days, h, m, app, style, text], i) => ({
+let history: HistoryItem[] = rows.filter(() => !location.search.includes("empty")).map(([days, h, m, app, style, text, raw], i) => ({
   id: rows.length - i,
   created_at: at(days, h, m),
   text,
+  raw,
   app,
   style,
   delivery: i === 6 ? "copied" : "pasted",
@@ -60,7 +65,7 @@ let history: HistoryItem[] = rows.map(([days, h, m, app, style, text], i) => ({
 
 // 20 weeks of words per day, deterministic, quieter at weekends.
 const activity: [string, number][] = [];
-for (let d = 0; d < 140; d++) {
+for (let d = 0; d < (location.search.includes("empty") ? 0 : 140); d++) {
   const date = new Date(now - d * DAY);
   const weekend = date.getDay() === 0 || date.getDay() === 6;
   const seed = Math.sin(d * 12.9898) * 43758.5453;
@@ -139,7 +144,7 @@ let suggestions: Suggestion[] = [
 ];
 let snippets: Snippet[] = [
   { id: 1, trigger: "my email", expansion: "wuslateam@gmail.com" },
-  { id: 2, trigger: "meeting link", expansion: "https://meet.example.com/hams-standup" },
+  { id: 2, trigger: "meeting link", expansion: "https://meet.google.com/kfx-hqrd-pna" },
   { id: 3, trigger: "sign off", expansion: "Thanks,\nArsh" },
 ];
 
@@ -163,12 +168,18 @@ export function mockCall(command: string, args: Record<string, unknown> = {}): u
   switch (command) {
     case "get_settings": return structuredClone(view);
     case "save_settings": view = { ...view, settings: args.settings as Settings }; return;
-    case "get_status": return { phase: "idle", kind: "dictate", locked: false, started_at: 0, message: null, text: history[0].text, app: null, preview: false };
+    case "get_status": return { phase: "idle", kind: "dictate", locked: false, started_at: 0, message: null, text: history[0]?.text ?? null, app: null, preview: false };
     case "stats": return stats();
     case "history": {
       const q = String(args.query ?? "").toLowerCase();
       const list = history.filter((h) => !q || h.text.toLowerCase().includes(q));
       return list.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.created_at - a.created_at).slice(0, Number(args.limit ?? 300));
+    }
+    case "history_recent": return [...history].sort((a, b) => b.created_at - a.created_at).slice(0, Number(args.limit ?? 5));
+    case "style_try": {
+      const said = String(args.text ?? "").replace(/\b(um|uh)\b\s*/g, "").trim();
+      const text = said.charAt(0).toUpperCase() + said.slice(1) + (args.style === "messaging" || args.style === "code" ? "" : ".");
+      return { text, polished: args.style !== "code" };
     }
     case "history_pin": history = history.map((h) => (h.id === args.id ? { ...h, pinned: Boolean(args.pinned) } : h)); return;
     case "history_delete": history = history.filter((h) => h.id !== args.id); return;
@@ -190,7 +201,7 @@ export function mockCall(command: string, args: Record<string, unknown> = {}): u
     case "snippet_upsert": snippets = [...snippets, { id: Date.now(), trigger: String(args.trigger), expansion: String(args.expansion) }]; return;
     case "list_models": return models;
     case "list_microphones": return ["MacBook Pro Microphone", "AirPods Pro"];
-    case "permissions": return { accessibility: true, applicable: true };
+    case "permissions": return { accessibility: !location.search.includes("empty"), applicable: true };
     case "styles": return styles;
     case "recent_apps": return ["Slack", "Mail", "Cursor", "Notion", "Linear", "Messages", "Safari"];
     case "default_ai_model": return "gemini-3.1-flash-lite";

@@ -13,11 +13,16 @@ const idle: Status = {
 };
 
 export type Route = "home" | "history" | "notes" | "dictionary" | "snippets" | "styles" | "settings";
+export type SettingsArea = "general" | "shortcuts" | "speech" | "output" | "ai" | "learning" | "updates" | "permissions";
 
 class AppStore {
   status = $state<Status>(idle);
   view = $state<SettingsView | null>(null);
   route = $state<Route>("home");
+  /** Which Settings view is open. */
+  settingsArea = $state<SettingsArea>("general");
+  /** Learned corrections waiting for approval (the Dictionary nav count). */
+  pendingSuggestions = $state(0);
   /** Bumped whenever history, stats or the dictionary change on disk. */
   dataVersion = $state(0);
   toast = $state<{ text: string; kind: "ok" | "error" } | null>(null);
@@ -37,14 +42,31 @@ class AppStore {
 
   async init() {
     await on<Status>("status", (s) => (this.status = s));
-    await on("data-changed", () => this.dataVersion++);
+    await on("data-changed", () => {
+      this.dataVersion++;
+      void this.refreshSuggestions();
+    });
     await on<UpdateInfo>("update-available", (u) => (this.update = u));
     await on<UpdateProgress>("update-progress", (p) => (this.updateProgress = p.total ? p.downloaded / p.total : null));
     try {
       this.view = await api.getSettings();
       this.status = await api.getStatus();
+      void this.refreshSuggestions();
     } catch (error) {
       this.notify(errorText(error), "error");
+    }
+  }
+
+  openSettings(area: SettingsArea) {
+    this.settingsArea = area;
+    this.route = "settings";
+  }
+
+  async refreshSuggestions() {
+    try {
+      this.pendingSuggestions = (await api.suggestions()).length;
+    } catch {
+      // Not fatal: the count just stays as it was.
     }
   }
 

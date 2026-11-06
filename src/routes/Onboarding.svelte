@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { api, errorText, on, type ModelStatus, type Permissions } from "../lib/ipc";
+  import { api, errorText, on, type HistoryItem, type ModelStatus, type Permissions } from "../lib/ipc";
   import { app } from "../lib/state.svelte";
   import { shortcutLabel } from "../lib/format";
-  import Mark from "../components/Mark.svelte";
+  import HeardWritten from "../components/HeardWritten.svelte";
 
   let step = $state(0);
   let permissions = $state<Permissions | null>(null);
@@ -13,6 +13,17 @@
   const steps = $derived(permissions?.applicable === false ? ["Welcome", "Model", "Try it"] : ["Welcome", "Permissions", "Model", "Try it"]);
   const current = $derived(steps[step]);
   const chosen = $derived(models.find((m) => m.id === s?.model));
+
+  // The test dictation: the first one made after reaching the last step.
+  let tryFrom = 0;
+  let attempt = $state.raw<HistoryItem | null>(null);
+  $effect(() => {
+    if (current !== "Try it") return;
+    if (!tryFrom) tryFrom = Date.now();
+    void app.dataVersion;
+    void app.status.phase;
+    api.historyRecent(1).then(([item]) => { if (item && item.created_at >= tryFrom - 1000) attempt = item; }).catch(() => {});
+  });
 
   $effect(() => {
     api.models().then((m) => (models = m)).catch(() => {});
@@ -45,7 +56,6 @@
 </script>
 
 <div class="wrap">
-  <div class="brand"><Mark size={22} /><span>Hams</span></div>
   <ol class="steps" aria-label="Setup steps">
     {#each steps as name, i}
       <li class:done={i < step} class:active={i === step} aria-current={i === step ? "step" : undefined}>{name}</li>
@@ -56,11 +66,10 @@
     {#if current === "Welcome"}
       <h1>Write at the speed you talk</h1>
       <p>Hold a shortcut in any app, talk naturally, let go. Hams writes clean text right where your cursor is.</p>
-      <ul class="small muted">
-        <li>Speech recognition runs on this computer, so it works offline and stays private.</li>
-        <li>Optional AI polish fixes grammar and adapts to Slack, email, code and more.</li>
-        <li>Select text and speak an instruction to rewrite it.</li>
-      </ul>
+      <div class="example">
+        <HeardWritten raw="um so can we uh move the review to thursday" text="So, can we move the review to Thursday?" />
+      </div>
+      <p class="small muted">Speech is recognised on this computer, so it works offline and stays private. Optional AI polish adapts the writing to Slack, email, code and more.</p>
       <div class="actions"><button class="primary" onclick={() => step++}>Get started</button></div>
     {:else if current === "Permissions"}
       <h1>Two quick permissions</h1>
@@ -114,17 +123,17 @@
     {:else if s}
       <h1>Try it</h1>
       <p>Hold <kbd>{shortcutLabel(s.dictate_shortcut, app.platform)}</kbd>, say a sentence, and let go.</p>
-      <div class="try" class:live={app.status.phase === "recording"}>
+      <div class="try" class:live={app.status.phase === "recording"} class:result={attempt && app.status.phase === "idle"} aria-live="polite">
         {#if app.status.phase === "recording"}
-          Listening…
+          <span class="listening"><span class="live-dot"></span>Listening…</span>
         {:else if ["transcribing", "polishing", "delivering"].includes(app.status.phase)}
-          Writing…
+          <span class="muted">Writing…</span>
         {:else if app.status.phase === "error"}
           <span class="error">{app.status.message}</span>
-        {:else if app.status.text}
-          “{app.status.text}”
+        {:else if attempt}
+          <HeardWritten raw={attempt.raw} text={attempt.text} summary />
         {:else}
-          <span class="muted">Your words will appear here.</span>
+          <span class="muted">What Hams heard, and what it wrote, will appear here.</span>
         {/if}
       </div>
       <p class="small muted">In other apps the text is pasted at your cursor. Here it's just shown.</p>
@@ -138,7 +147,6 @@
 
 <style>
   .wrap { max-width: 560px; margin: 8px auto 0; display: flex; flex-direction: column; gap: 18px; }
-  .brand { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 16px; }
   .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 6px; list-style: none; padding: 0; margin: 0; }
   .steps li { font-size: 12px; color: var(--muted); padding-top: 8px; position: relative; }
   .steps li::before { content: ""; position: absolute; inset: 0 0 auto; height: 3px; border-radius: 2px; background: var(--rule); }
@@ -146,12 +154,13 @@
   .steps li.active { color: var(--text); font-weight: 500; }
   .panel { padding: 28px; gap: 16px; }
   .panel :global(h1) { font-size: 22px; }
-  ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
-  li::marker { color: var(--data); }
   .perm { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--raised); border-radius: var(--radius-card); }
   .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
-  .try { min-height: 84px; border: 1px dashed var(--control); border-radius: var(--radius-card); padding: 16px; display: grid; place-items: center; text-align: center; font-size: 15px; }
-  .try.live { border-color: var(--live); color: var(--live); }
+  .try { min-height: 84px; border: 1px dashed var(--control); border-radius: var(--radius-card); padding: 16px; display: grid; place-items: center; text-align: center; font-size: 16px; }
+  .try.live { border-color: var(--live); }
+  .try.result { display: block; text-align: left; border-style: solid; border-color: var(--border); }
+  .listening { display: inline-flex; align-items: center; gap: 8px; }
+  .example { padding: 16px; background: var(--raised); border-radius: var(--radius-card); }
   .error { color: var(--negative); }
   progress { width: 140px; }
 </style>

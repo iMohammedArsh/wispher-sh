@@ -1,24 +1,29 @@
 <script lang="ts">
-  import { api, errorText, on, type AiProvider, type DeliveryMode, type ModelProgress, type ModelStatus, type Permissions } from "../lib/ipc";
-  import { app } from "../lib/state.svelte";
+  // Settings: one view per area, picked from the list on the left. Every control saves itself.
+  import { api, errorText, on, type AiProvider, type DeliveryMode, type ModelProgress, type ModelStatus, type Permissions, type RestyleResult } from "../lib/ipc";
+  import { app, type SettingsArea } from "../lib/state.svelte";
   import { shortcutLabel } from "../lib/format";
   import ConfirmButton from "../components/ConfirmButton.svelte";
+  import HeardWritten from "../components/HeardWritten.svelte";
+  import Icon from "../components/Icon.svelte";
 
-  let models = $state<ModelStatus[]>([]);
+  let models = $state.raw<ModelStatus[]>([]);
   let progress = $state<Record<string, number>>({});
-  let microphones = $state<string[]>([]);
-  let permissions = $state<Permissions | null>(null);
+  let microphones = $state.raw<string[]>([]);
+  let permissions = $state.raw<Permissions | null>(null);
   let shortcuts = $state({ dictate: "", command: "", paste: "" });
   let apiKey = $state("");
   let defaultModel = $state("");
-  let aiTest = $state<{ ok: boolean; text: string } | null>(null);
-  let testing = $state(false);
+  let trial = $state<{ ok: true; result: RestyleResult } | { ok: false; text: string } | null>(null);
+  let trying = $state(false);
   let openAtLogin = $state(false);
   let version = $state("");
   let checking = $state(false);
   let checkedAt = $state<number | null>(null);
 
   const s = $derived(app.settings);
+  const mac = $derived(app.platform === "macos");
+  const key = (v: string) => shortcutLabel(v, app.platform);
 
   $effect(() => {
     api.models().then((m) => (models = m)).catch(() => {});
@@ -39,8 +44,24 @@
     if (provider) api.defaultAiModel(provider).then((m) => (defaultModel = m)).catch(() => {});
   });
 
+  const areas = $derived(
+    (
+      [
+        { id: "general", label: "General", sub: "How Hams starts and where it lives." },
+        { id: "shortcuts", label: "Shortcuts", sub: "The keys you hold to talk." },
+        { id: "speech", label: "Speech", sub: "Recognised on this computer, so it works offline and your voice never leaves it." },
+        { id: "output", label: "Output", sub: "What happens to the text once it's written." },
+        { id: "ai", label: "AI polish", sub: "Optional. Fixes grammar, follows each app's style, edits selected text and summarises notes. Only text is sent, never audio." },
+        { id: "learning", label: "Learning", sub: "Hams learns your words from corrections. It only suggests; you approve each one in Dictionary." },
+        { id: "updates", label: "Updates", sub: "New versions are signed, and Hams checks the signature before installing anything." },
+        { id: "permissions", label: "Permissions", sub: "macOS asks for these once." },
+      ] satisfies { id: SettingsArea; label: string; sub: string }[]
+    ).filter((a) => a.id !== "permissions" || permissions?.applicable),
+  );
+  const area = $derived(areas.find((a) => a.id === app.settingsArea) ?? areas[0]);
+
   const presets = $derived(
-    app.platform === "macos"
+    mac
       ? ["Meta+Shift+Space", "Ctrl+Shift+Space", "Fn", "RightAlt", "RightMeta", "Meta+Alt+Shift+V", "F13"]
       : ["Ctrl+Shift+Space", "Ctrl+Alt+Space", "RightAlt", "RightCtrl", "Ctrl+Alt+Shift+V", "F13"],
   );
@@ -56,18 +77,34 @@
     { id: "custom", label: "Custom OpenAI-compatible", key: true },
   ];
   const languages = [
-    ["auto", "Detect automatically"], ["en", "English"], ["ml", "Malayalam"], ["hi", "Hindi"], ["ta", "Tamil"],
-    ["ar", "Arabic"], ["es", "Spanish"], ["fr", "French"], ["de", "German"], ["pt", "Portuguese"], ["ja", "Japanese"], ["zh", "Chinese"],
+    ["auto", "Detect automatically"], ["en", "English"], ["ml", "Malayalam"], ["ms", "Malay"], ["id", "Indonesian"], ["hi", "Hindi"],
+    ["ta", "Tamil"], ["ur", "Urdu"], ["ar", "Arabic"], ["es", "Spanish"], ["fr", "French"], ["de", "German"], ["pt", "Portuguese"],
+    ["ja", "Japanese"], ["zh", "Chinese"],
   ];
-  const deliveries: { id: DeliveryMode; label: string; hint: string }[] = [
-    { id: "paste_restore", label: "Paste, keep my clipboard", hint: "Pastes, then puts back whatever you had copied." },
-    { id: "paste", label: "Paste and leave on clipboard", hint: "Handy if you want to paste it again elsewhere." },
-    { id: "copy_only", label: "Copy only", hint: "You paste it yourself." },
+  const languageName = (id: string) => languages.find(([code]) => code === id)?.[1] ?? id;
+  /** Tick or untick a language detection may choose; the first one stays the main language. */
+  function toggleLanguage(id: string) {
+    const current = s?.languages ?? [];
+    app.save({ languages: current.includes(id) ? current.filter((l) => l !== id) : [...current, id] });
+  }
+  function setMainLanguage(id: string) {
+    const current = s?.languages ?? [];
+    app.save({ languages: [id, ...current.filter((l) => l !== id)] });
+  }
+  // Each delivery mode, and what's true once a dictation has been delivered.
+  const deliveries: { id: DeliveryMode; label: string; pasted: boolean; clipboard: string }[] = [
+    { id: "paste_restore", label: "Paste, keep my clipboard", pasted: true, clipboard: "What you had copied before" },
+    { id: "paste", label: "Paste and keep it copied", pasted: true, clipboard: "The dictation, to paste again" },
+    { id: "copy_only", label: "Copy only", pasted: false, clipboard: "The dictation, for you to paste" },
   ];
+  const delivery = $derived(deliveries.find((d) => d.id === s?.delivery) ?? deliveries[0]);
+
+  const SAMPLE = "um so i think we should uh move the review to thursday if that works for everyone";
 
   const shortcutsChanged = $derived(
     !!s && (shortcuts.dictate !== s.dictate_shortcut || shortcuts.command !== s.command_shortcut || shortcuts.paste !== s.paste_last_shortcut),
   );
+  const providerInfo = $derived(providers.find((p) => p.id === s?.ai.provider));
 
   async function toggleAutostart(enabled: boolean) {
     await app.run(() => api.setAutostart(enabled), enabled ? "Hams will open at login" : "Hams won’t open at login");
@@ -106,15 +143,15 @@
     await app.reloadSettings();
   }
 
-  async function testAi() {
-    testing = true;
-    aiTest = null;
+  async function tryPolish() {
+    trying = true;
+    trial = null;
     try {
-      aiTest = { ok: true, text: await api.testAi() };
+      trial = { ok: true, result: await api.styleTry("default", SAMPLE) };
     } catch (error) {
-      aiTest = { ok: false, text: errorText(error) };
+      trial = { ok: false, text: errorText(error) };
     } finally {
-      testing = false;
+      trying = false;
     }
   }
 
@@ -129,168 +166,204 @@
       checking = false;
     }
   }
-
-  const providerInfo = $derived(providers.find((p) => p.id === s?.ai.provider));
 </script>
 
-{#if s}
-  <div class="page">
-    <header class="title-row">
-      <div>
-        <h1>Settings</h1>
-        <p class="sub">Changes save as you make them.</p>
-      </div>
-    </header>
+{#snippet toggle(title: string, detail: string, checked: boolean, onchange: (on: boolean) => void, disabled = false)}
+  <label class="switch-row">
+    <span class="text"><strong>{title}</strong><span>{detail}</span></span>
+    <input class="switch" type="checkbox" {checked} {disabled} onchange={(e) => onchange(e.currentTarget.checked)} />
+  </label>
+{/snippet}
 
-    <div>
-      <section class="setting" aria-labelledby="general">
-        <header>
-          <h2 id="general">General</h2>
-          <p>How Hams starts and where it lives.</p>
-        </header>
+{#if s}
+  <div class="settings">
+    <nav class="areas" aria-label="Settings">
+      <p class="areas-title">Settings</p>
+      {#each areas as a (a.id)}
+        <button class:active={a.id === area.id} aria-current={a.id === area.id ? "page" : undefined} onclick={() => (app.settingsArea = a.id)}>
+          {a.label}
+          {#if a.id === "updates" && app.update}<span class="dot" title="Update ready"></span>{/if}
+          {#if a.id === "permissions" && permissions && !permissions.accessibility}<span class="dot warn" title="Needs attention"></span>{/if}
+        </button>
+      {/each}
+    </nav>
+
+    <div class="page view">
+      <header class="title-row">
         <div>
-          <label class="switch-row">
-            <span class="text"><strong>Open Hams at login</strong><span>Starts quietly in the menu bar, ready for your shortcut.</span></span>
-            <input class="switch" type="checkbox" checked={openAtLogin} onchange={(e) => toggleAutostart(e.currentTarget.checked)} />
-          </label>
+          <h1>{area.label}</h1>
+          <p class="sub">{area.sub}</p>
+        </div>
+      </header>
+
+      {#if area.id === "general"}
+        <div class="panel">
+          {@render toggle("Open Hams at login", "Starts quietly in the menu bar, ready for your shortcut.", openAtLogin, toggleAutostart)}
           <div class="switch-row">
             <span class="text"><strong>Closing the window</strong><span>Keeps Hams running in the menu bar. Quit from the menu bar icon.</span></span>
           </div>
         </div>
-      </section>
 
-      <section class="setting" aria-labelledby="shortcuts">
-        <header>
-          <h2 id="shortcuts">Shortcuts</h2>
-          <p>
-            Combine Ctrl, {app.platform === "macos" ? "Option, Shift and Cmd" : "Alt, Shift and Win"} with a key, or hold one key on its own, like
-            {app.platform === "macos" ? "Fn or RightAlt. For Fn, set “Press 🌐 key to” to “Do Nothing” in Keyboard settings." : "RightAlt or RightCtrl."}
-          </p>
-        </header>
-        <div class="stack wide-gap">
-          <datalist id="shortcut-presets">{#each presets as p}<option value={p}></option>{/each}</datalist>
-          <div class="fields">
-            <label class="field">
-              <span>Dictate <span class="hint">hold</span></span>
-              <input type="text" list="shortcut-presets" bind:value={shortcuts.dictate} />
-              <span class="hint keys"><kbd>{shortcutLabel(shortcuts.dictate, app.platform)}</kbd></span>
-            </label>
-            <label class="field">
-              <span>Edit selected text <span class="hint">hold</span></span>
-              <input type="text" list="shortcut-presets" bind:value={shortcuts.command} />
-              <span class="hint keys"><kbd>{shortcutLabel(shortcuts.command, app.platform)}</kbd></span>
-            </label>
-            <label class="field">
-              <span>Paste last dictation</span>
-              <input type="text" list="shortcut-presets" bind:value={shortcuts.paste} placeholder="Off" />
-              <span class="hint keys">{#if shortcuts.paste}<kbd>{shortcutLabel(shortcuts.paste, app.platform)}</kbd>{:else}Off{/if}</span>
-            </label>
-          </div>
-          <div class="spread">
-            <label class="row small">
-              <input class="switch" type="checkbox" checked={s.double_tap_lock} onchange={(e) => app.save({ double_tap_lock: e.currentTarget.checked })} />
-              Double-tap the dictate shortcut for hands-free
-            </label>
+      {:else if area.id === "shortcuts"}
+        <datalist id="shortcut-presets">{#each presets as p (p)}<option value={p}></option>{/each}</datalist>
+        <div class="panel flush">
+          <ul class="rows keys">
+            <li>
+              <label class="field">
+                <span>Dictate</span>
+                <input type="text" list="shortcut-presets" bind:value={shortcuts.dictate} />
+              </label>
+              <dl class="does">
+                <div><dt>Hold <kbd>{key(shortcuts.dictate)}</kbd></dt><dd>Talk, let go to paste</dd></div>
+                {#if s.double_tap_lock}<div><dt>Double-tap</dt><dd>Hands-free until you tap again</dd></div>{/if}
+                <div><dt><kbd>Esc</kbd></dt><dd>Cancel while recording</dd></div>
+              </dl>
+            </li>
+            <li>
+              <label class="field">
+                <span>Edit selected text</span>
+                <input type="text" list="shortcut-presets" bind:value={shortcuts.command} />
+              </label>
+              <dl class="does">
+                <div><dt>Select, hold <kbd>{key(shortcuts.command)}</kbd></dt><dd>Say what to change: “make it formal”</dd></div>
+                <div><dt>Nothing selected</dt><dd>Say what to write: “reply that I'll be late”</dd></div>
+              </dl>
+            </li>
+            <li>
+              <label class="field">
+                <span>Paste last dictation</span>
+                <input type="text" list="shortcut-presets" bind:value={shortcuts.paste} placeholder="Off" />
+              </label>
+              <dl class="does">
+                <div><dt>{#if shortcuts.paste}Press <kbd>{key(shortcuts.paste)}</kbd>{:else}Off{/if}</dt><dd>Pastes your last dictation again</dd></div>
+              </dl>
+            </li>
+          </ul>
+          <div class="panel-foot">
+            <span class="muted small grow">
+              Combine Ctrl, {mac ? "Option, Shift and Cmd" : "Alt, Shift and Win"} with a key, or use one key on its own like {mac ? "Fn or RightAlt. For Fn, set “Press 🌐 key to” to “Do Nothing” in Keyboard settings." : "RightAlt or RightCtrl."} <!-- taste-skill-ignore: 🌐 is how macOS names this key setting -->
+            </span>
             <button class="primary" onclick={saveShortcuts} disabled={!shortcutsChanged}>Save shortcuts</button>
           </div>
         </div>
-      </section>
+        <div class="panel">
+          {@render toggle("Double-tap for hands-free", "Tap the dictate shortcut twice to keep recording without holding it.", s.double_tap_lock, (v) => app.save({ double_tap_lock: v }))}
+        </div>
 
-      <section class="setting" aria-labelledby="speech">
-        <header>
-          <h2 id="speech">Speech recognition</h2>
-          <p>Runs on this computer, so it works offline and your voice never leaves it.</p>
-        </header>
-        <div class="stack wide-gap">
-          <ul class="panel flush rows models" aria-label="Speech models">
-            {#each models as m (m.id)}
-              <li class:selected={s.model === m.id}>
-                <label class="grow model">
-                  <input type="radio" name="model" checked={s.model === m.id} disabled={!m.installed} onchange={() => app.save({ model: m.id })} />
-                  <span class="grow">
-                    <strong>{m.label}</strong> <span class="small muted num">{m.size_mb} MB</span>
-                    <span class="small muted block">{m.note}</span>
-                  </span>
-                </label>
-                {#if progress[m.id] !== undefined}
-                  <span class="progress"><progress max="1" value={progress[m.id]}></progress><span class="small muted num">{Math.round(progress[m.id] * 100)}%</span></span>
-                {:else if s.model === m.id && m.installed}
-                  <span class="pill ok">In use</span>
-                {:else if m.installed}
-                  <ConfirmButton small ghost confirm="Delete from disk?" onconfirm={() => remove(m.id)}>Delete</ConfirmButton>
-                {:else}
-                  <button class="small" onclick={() => download(m.id)}>Download</button>
-                {/if}
-              </li>
-            {/each}
-          </ul>
-          <div class="fields">
-            <label class="field">
-              <span>Language</span>
-              <select value={s.language} onchange={(e) => app.save({ language: e.currentTarget.value })}>
-                {#each languages as [id, label]}<option value={id}>{label}</option>{/each}
-              </select>
-            </label>
-            <label class="field">
-              <span>Microphone</span>
-              <select value={s.microphone ?? ""} onchange={(e) => app.save({ microphone: e.currentTarget.value || null })}>
-                <option value="">System default</option>
-                {#each microphones as mic}<option value={mic}>{mic}</option>{/each}
-              </select>
-            </label>
-          </div>
-          <label class="switch-row">
-            <span class="text">
-              <strong>Keep the microphone ready</strong>
-              <span>Recording starts instantly and includes the moment before you pressed the shortcut. The mic stays on while Hams runs{app.platform === "macos" ? ", so macOS shows its microphone dot" : ""}. Only the last moment (under a second) is kept, in memory, and nothing is saved until you dictate.</span>
-            </span>
-            <input class="switch" type="checkbox" checked={s.keep_mic_warm} onchange={(e) => app.save({ keep_mic_warm: e.currentTarget.checked })} />
+      {:else if area.id === "speech"}
+        <section aria-labelledby="models-title">
+          <div class="section-head"><h2 id="models-title">Model</h2><span class="aside">Bigger is more accurate and slower</span></div>
+          <table class="panel models">
+            <thead><tr><th>Name</th><th class="num">Size</th><th></th></tr></thead>
+            <tbody>
+              {#each models as m (m.id)}
+                <tr class:selected={s.model === m.id}>
+                  <td>
+                    <label class="model">
+                      <input type="radio" name="model" checked={s.model === m.id} disabled={!m.installed} onchange={() => app.save({ model: m.id })} />
+                      <span><strong>{m.label}</strong><span class="muted small block">{m.note}</span></span>
+                    </label>
+                  </td>
+                  <td class="num muted">{m.size_mb} MB</td>
+                  <td class="act">
+                    {#if progress[m.id] !== undefined}
+                      <span class="progress"><progress max="1" value={progress[m.id]}></progress><span class="small muted num">{Math.round(progress[m.id] * 100)}%</span></span>
+                    {:else if s.model === m.id && m.installed}
+                      <span class="pill ok">In use</span>
+                    {:else if m.installed}
+                      <ConfirmButton small ghost confirm="Delete from disk?" onconfirm={() => remove(m.id)}>Delete</ConfirmButton>
+                    {:else}
+                      <button class="small" onclick={() => download(m.id)}>Download</button>
+                    {/if}
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </section>
+        <div class="fields">
+          <label class="field">
+            <span>Language</span>
+            <select value={s.language} onchange={(e) => app.save({ language: e.currentTarget.value })}>
+              {#each languages as [id, label] (id)}<option value={id}>{label}</option>{/each}
+            </select>
+          </label>
+          <label class="field">
+            <span>Microphone</span>
+            <select value={s.microphone ?? ""} onchange={(e) => app.save({ microphone: e.currentTarget.value || null })}>
+              <option value="">System default</option>
+              {#each microphones as mic (mic)}<option value={mic}>{mic}</option>{/each}
+            </select>
           </label>
         </div>
-      </section>
+        {#if s.language === "auto"}
+          <section class="spoken" aria-labelledby="spoken-title">
+            <div class="section-head">
+              <h2 id="spoken-title">Languages you speak</h2>
+              <span class="aside">Detection only picks from these</span>
+            </div>
+            <div class="chips" role="group" aria-labelledby="spoken-title">
+              {#each languages.slice(1) as [id, label] (id)}
+                {@const on = s.languages.includes(id)}
+                <button class="chip" class:on aria-pressed={on} onclick={() => toggleLanguage(id)}>{label}</button>
+              {/each}
+            </div>
+            {#if s.languages.length === 0}
+              <p class="small muted">Any language can be picked, so English with a strong accent may come out in another language. Tick the ones you speak.</p>
+            {:else}
+              <p class="small muted">
+                A strong accent can't switch you to a language that isn't ticked. Speech in an unticked language comes out in one of these.
+                {#if s.languages.length === 1}With one language ticked, everything is written in {languageName(s.languages[0])}.{/if}
+              </p>
+              {#if s.languages.length > 1}
+                <label class="field main-language">
+                  <span>When unsure, use</span>
+                  <select value={s.languages[0]} onchange={(e) => setMainLanguage(e.currentTarget.value)}>
+                    {#each s.languages as id (id)}<option value={id}>{languageName(id)}</option>{/each}
+                  </select>
+                </label>
+              {/if}
+            {/if}
+          </section>
+        {/if}
+        <div class="panel">
+          {@render toggle(
+            "Keep the microphone ready",
+            `Recording starts instantly and includes the moment before you pressed the shortcut. The mic stays on while Hams runs${mac ? " (macOS shows its mic dot)" : ""}; only the last second is held, in memory.`,
+            s.keep_mic_warm,
+            (v) => app.save({ keep_mic_warm: v }),
+          )}
+          {@render toggle("Live preview", "Shows your words in the overlay while you speak. Uses more battery.", s.live_preview, (v) => app.save({ live_preview: v }))}
+        </div>
 
-      <section class="setting" aria-labelledby="output">
-        <header>
-          <h2 id="output">Output</h2>
-          <p>What happens to the text once it's written.</p>
-        </header>
-        <div class="stack wide-gap">
+      {:else if area.id === "output"}
+        <div class="output">
           <div class="choices" role="radiogroup" aria-label="Delivery">
-            {#each deliveries as d}
+            {#each deliveries as d (d.id)}
               <label class="choice" class:selected={s.delivery === d.id}>
                 <input type="radio" name="delivery" checked={s.delivery === d.id} onchange={() => app.save({ delivery: d.id })} />
-                <span><strong>{d.label}</strong><span class="small muted block">{d.hint}</span></span>
+                <strong>{d.label}</strong>
               </label>
             {/each}
           </div>
-          <div>
-            <label class="switch-row">
-              <span class="text"><strong>Remove filler words</strong><span>Drops “um”, “uh” and stutters.</span></span>
-              <input class="switch" type="checkbox" checked={s.remove_fillers} onchange={(e) => app.save({ remove_fillers: e.currentTarget.checked })} />
-            </label>
-            <label class="switch-row">
-              <span class="text"><strong>Voice commands</strong><span>“New line”, “new paragraph” and “scratch that” edit as you speak.</span></span>
-              <input class="switch" type="checkbox" checked={s.voice_commands} onchange={(e) => app.save({ voice_commands: e.currentTarget.checked })} />
-            </label>
-            <label class="switch-row">
-              <span class="text"><strong>Live preview</strong><span>Shows your words in the overlay while you speak. Uses more battery.</span></span>
-              <input class="switch" type="checkbox" checked={s.live_preview} onchange={(e) => app.save({ live_preview: e.currentTarget.checked })} />
-            </label>
-          </div>
+          <dl class="panel result" aria-label="After a dictation">
+            <p class="result-title">After a dictation</p>
+            <div><dt>In the app you were using</dt><dd>{#if delivery.pasted}<Icon name="check" size={14} /> The text is pasted{:else}Nothing is pasted{/if}</dd></div>
+            <div><dt>On your clipboard</dt><dd>{delivery.clipboard}</dd></div>
+          </dl>
         </div>
-      </section>
+        <div class="panel">
+          {@render toggle("Remove filler words", "Drops “um”, “uh” and stutters.", s.remove_fillers, (v) => app.save({ remove_fillers: v }))}
+          {@render toggle("Voice commands", "“New line”, “new paragraph” and “scratch that” edit as you speak.", s.voice_commands, (v) => app.save({ voice_commands: v }))}
+        </div>
 
-      <section class="setting" aria-labelledby="ai">
-        <header>
-          <h2 id="ai">AI polish</h2>
-          <p>Optional. Fixes grammar, follows each app's style, edits selected text and summarises notes. Only the transcript text is sent, never audio.</p>
-        </header>
-        <div class="stack wide-gap">
+      {:else if area.id === "ai"}
+        <div class="panel stack">
           <div class="fields">
             <label class="field">
               <span>Provider</span>
-              <select value={s.ai.provider} onchange={(e) => app.save({ ai: { ...s.ai, provider: e.currentTarget.value as AiProvider, model: "" } })}>
-                {#each providers as p}<option value={p.id}>{p.label}</option>{/each}
+              <select value={s.ai.provider} onchange={(e) => { trial = null; app.save({ ai: { ...s.ai, provider: e.currentTarget.value as AiProvider, model: "" } }); }}>
+                {#each providers as p (p.id)}<option value={p.id}>{p.label}</option>{/each}
               </select>
             </label>
             {#if s.ai.provider !== "off"}
@@ -309,7 +382,7 @@
           {/if}
           {#if providerInfo?.key}
             <div class="field">
-              <span>API key <span class="hint">{app.view?.has_api_key ? "saved in your keychain" : "stored in your keychain, never in a file"}</span></span>
+              <span>API key <span class="hint">{app.view?.has_api_key ? "Saved in your keychain" : "Kept in your keychain, never in a file"}</span></span>
               <div class="joined">
                 <input type="password" bind:value={apiKey} placeholder={app.view?.has_api_key ? "••••••••••••" : "Paste your API key"} aria-label="API key" />
                 <button onclick={saveKey}>{apiKey ? "Save key" : app.view?.has_api_key ? "Remove key" : "Save key"}</button>
@@ -321,125 +394,163 @@
               <label class="field">
                 <span>Skip AI for dictations shorter than</span>
                 <select value={s.ai.smart_skip_words} onchange={(e) => app.save({ ai: { ...s.ai, smart_skip_words: Number(e.currentTarget.value) } })}>
-                  {#each [0, 2, 4, 6, 10] as n}<option value={n}>{n === 0 ? "Never skip" : `${n} words`}</option>{/each}
+                  {#each [0, 2, 4, 6, 10] as n (n)}<option value={n}>{n === 0 ? "Never skip" : `${n} words`}</option>{/each}
                 </select>
               </label>
               <label class="field">
                 <span>Paste the plain text after</span>
                 <select value={s.ai.timeout_ms} onchange={(e) => app.save({ ai: { ...s.ai, timeout_ms: Number(e.currentTarget.value) } })}>
-                  {#each [3000, 6000, 10000, 20000] as n}<option value={n}>{n / 1000} seconds</option>{/each}
+                  {#each [3000, 6000, 10000, 20000] as n (n)}<option value={n}>{n / 1000} seconds</option>{/each}
                 </select>
               </label>
             </div>
-            <div class="row">
-              <button onclick={testAi} disabled={testing}>{testing ? "Testing…" : "Test connection"}</button>
-              {#if aiTest}<span class="small" class:danger-text={!aiTest.ok} class:ok-text={aiTest.ok}>{aiTest.ok ? "Works: " : ""}{aiTest.text}</span>{/if}
-            </div>
           {/if}
         </div>
-      </section>
 
-      <section class="setting" aria-labelledby="learning">
-        <header>
-          <h2 id="learning">Learning</h2>
-          <p>Hams learns your words from corrections. It only ever suggests; you approve each one in Dictionary.</p>
-        </header>
-        <div>
-          <label class="switch-row">
-            <span class="text"><strong>Learn from edits in History</strong><span>When you fix a dictation in History, the change becomes a suggestion.</span></span>
-            <input class="switch" type="checkbox" checked={s.learn_from_edits} onchange={(e) => app.save({ learn_from_edits: e.currentTarget.checked })} />
-          </label>
-          <label class="switch-row">
-            <span class="text">
-              <strong>Learn from edits in other apps</strong>
-              <span>
-                {app.platform === "macos"
-                  ? "After a paste, Hams re-reads that text field for up to a minute. If you correct a word it wrote, it suggests the fix. Password fields are never read, and the field's text is never saved."
-                  : "Coming to Windows later. On Windows, fix dictations in History instead."}
-              </span>
-            </span>
-            <input class="switch" type="checkbox" checked={s.learn_from_fields} disabled={app.platform !== "macos"} onchange={(e) => app.save({ learn_from_fields: e.currentTarget.checked })} />
-          </label>
+        <section class="panel stack" aria-labelledby="try-title">
+          <div class="spread">
+            <h2 id="try-title">Try it</h2>
+            <button onclick={tryPolish} disabled={trying}>{#if trying}<span class="spinner"></span>Writing…{:else}Run on a sample{/if}</button>
+          </div>
+          {#if trial?.ok}
+            <HeardWritten raw={SAMPLE} text={trial.result.text} summary />
+            {#if !trial.result.polished}<p class="muted small">AI polish is off, so this is Hams' local clean-up only.</p>{/if}
+          {:else if trial}
+            <p class="danger-text small">{trial.text}</p>
+          {:else}
+            <p class="muted">See how a rambling sentence comes out with these settings: <q>{SAMPLE}</q></p>
+          {/if}
+        </section>
+
+      {:else if area.id === "learning"}
+        <div class="panel">
+          {@render toggle("Learn from edits in History", "When you fix a dictation in History, the change becomes a suggestion.", s.learn_from_edits, (v) => app.save({ learn_from_edits: v }))}
+          {@render toggle(
+            "Learn from edits in other apps",
+            mac
+              ? "After a paste, Hams re-reads that text field for up to a minute. If you correct a word it wrote, it suggests the fix. Password fields are never read, and the field's text is never saved."
+              : "Coming to Windows later. Fix dictations in History instead.",
+            s.learn_from_fields,
+            (v) => app.save({ learn_from_fields: v }),
+            !mac,
+          )}
         </div>
-      </section>
+        {#if app.pendingSuggestions}
+          <div class="notice">
+            <span class="grow">{app.pendingSuggestions} {app.pendingSuggestions === 1 ? "suggestion is" : "suggestions are"} waiting for you.</span>
+            <button onclick={() => (app.route = "dictionary")}>Review in Dictionary</button>
+          </div>
+        {/if}
 
-      <section class="setting" aria-labelledby="updates">
-        <header>
-          <h2 id="updates">Updates</h2>
-          <p>New versions are signed, and Hams checks the signature before installing anything.</p>
-        </header>
-        <div class="stack wide-gap">
-          <div class="panel version">
-            <div class="grow">
-              {#if app.update}
-                <strong>Hams {app.update.version} is available</strong>
-                <span class="small muted block">You have {app.update.current_version}.{app.update.notes ? ` ${app.update.notes}` : ""}</span>
-              {:else}
-                <strong>Hams <span class="num">{version}</span></strong>
-                <span class="small muted block">{checkedAt ? "You're up to date." : "Checked automatically every few hours."}</span>
-              {/if}
-            </div>
+      {:else if area.id === "updates"}
+        <div class="panel version">
+          <div class="grow">
             {#if app.update}
-              {#if app.updateProgress !== undefined}
-                <span class="progress">
-                  <progress max="1" value={app.updateProgress ?? undefined}></progress>
-                  <span class="small muted num">{app.updateProgress === null ? "Downloading" : app.updateProgress >= 1 ? "Installing" : `${Math.round(app.updateProgress * 100)}%`}</span>
-                </span>
-              {:else}
-                <button class="primary" onclick={() => app.installUpdate()}>Install and restart</button>
-              {/if}
+              <strong>Hams {app.update.version} is ready</strong>
+              <span class="small muted block">You have {app.update.current_version}.{app.update.notes ? ` ${app.update.notes}` : ""}</span>
             {:else}
-              <button onclick={checkForUpdate} disabled={checking}>{checking ? "Checking…" : "Check now"}</button>
+              <strong>Hams <span class="num">{version}</span></strong>
+              <span class="small muted block">{checkedAt ? "You're up to date." : "Checked automatically every few hours."}</span>
             {/if}
           </div>
-          <label class="switch-row">
-            <span class="text"><strong>Check for updates automatically</strong><span>Hams only downloads an update when you click Install.</span></span>
-            <input class="switch" type="checkbox" checked={s.check_updates} onchange={(e) => app.save({ check_updates: e.currentTarget.checked })} />
-          </label>
+          {#if app.update}
+            {#if app.updateProgress !== undefined}
+              <span class="progress">
+                <progress max="1" value={app.updateProgress ?? undefined}></progress>
+                <span class="small muted num">{app.updateProgress === null ? "Downloading" : app.updateProgress >= 1 ? "Installing" : `${Math.round(app.updateProgress * 100)}%`}</span>
+              </span>
+            {:else}
+              <button class="primary" onclick={() => app.installUpdate()}>Install and restart</button>
+            {/if}
+          {:else}
+            <button onclick={checkForUpdate} disabled={checking}>{checking ? "Checking…" : "Check now"}</button>
+          {/if}
         </div>
-      </section>
+        <div class="panel">
+          {@render toggle("Check for updates automatically", "Hams only downloads an update when you click Install.", s.check_updates, (v) => app.save({ check_updates: v }))}
+        </div>
 
-      {#if permissions?.applicable}
-        <section class="setting" aria-labelledby="permissions">
-          <header>
-            <h2 id="permissions">Permissions</h2>
-            <p>macOS asks for these once. Signing Hams with the local certificate keeps them across updates.</p>
-          </header>
-          <ul class="panel flush rows">
-            <li class="spread">
-              <span><strong class="label">Accessibility</strong><span class="small muted block">Shortcut, paste, selected text and learning from fields</span></span>
-              {#if permissions.accessibility}<span class="pill ok">Allowed</span>{:else}<button class="small" onclick={() => api.openPermissionSettings("accessibility")}>Open System Settings</button>{/if}
-            </li>
-            <li class="spread">
-              <span><strong class="label">Microphone</strong><span class="small muted block">macOS asks the first time you dictate</span></span>
-              <button class="small" onclick={() => api.openPermissionSettings("microphone")}>Open System Settings</button>
-            </li>
-          </ul>
-        </section>
+      {:else if area.id === "permissions" && permissions}
+        <ul class="panel flush rows">
+          <li class="spread">
+            <span><strong class="label">Accessibility</strong><span class="small muted block">Shortcut, paste, selected text and learning from fields</span></span>
+            {#if permissions.accessibility}<span class="pill ok">Allowed</span>{:else}<button class="small" onclick={() => api.openPermissionSettings("accessibility")}>Open System Settings</button>{/if}
+          </li>
+          <li class="spread">
+            <span><strong class="label">Microphone</strong><span class="small muted block">macOS asks the first time you dictate</span></span>
+            <button class="small" onclick={() => api.openPermissionSettings("microphone")}>Open System Settings</button>
+          </li>
+        </ul>
+        <p class="muted small">Signing Hams with the local certificate keeps these permissions across updates.</p>
       {/if}
     </div>
   </div>
 {/if}
 
 <style>
-  .wide-gap { gap: 18px; }
+  .settings { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 32px; align-items: start; max-width: 1000px; }
+  .areas { position: sticky; top: 0; display: flex; flex-direction: column; gap: 2px; padding-top: 2px; }
+  .areas-title { font-size: 12px; color: var(--muted); padding: 0 10px 8px; }
+  .areas button { height: 30px; justify-content: flex-start; border: none; background: transparent; padding: 0 10px; font-weight: 400; color: var(--muted); }
+  .areas button:hover:not(.active) { background: color-mix(in srgb, var(--active) 60%, transparent); color: var(--text); }
+  .areas button.active { background: var(--active); color: var(--text); font-weight: 500; }
+  .areas .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--data); margin-left: auto; }
+  .areas .dot.warn { background: var(--pill-warning-ink); }
+  .view { max-width: 720px; }
+
   .block { display: block; }
-  .keys { min-height: 22px; }
-  .models li { display: flex; align-items: center; gap: 12px; padding-top: 10px; padding-bottom: 10px; }
-  .models li.selected { background: var(--raised); }
+  .label { font-weight: 500; }
+  .panel > .switch-row:first-child { padding-top: 0; }
+  .stack { gap: 16px; }
+
+  .keys > li { display: flex; flex-direction: column; gap: 12px; padding-top: 16px; padding-bottom: 16px; }
+  .keys .field { max-width: 300px; }
+  .spoken { display: flex; flex-direction: column; gap: 10px; }
+  .spoken p { margin: 0; max-width: 68ch; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { height: 26px; padding: 0 10px; border-radius: 999px; font-size: 13px; font-weight: 400; color: var(--muted); border-color: var(--border); }
+  .chip.on { background: var(--active); border-color: var(--active); color: var(--text); font-weight: 500; }
+  .main-language { max-width: 240px; }
+  .does { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+  .does div { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 12px; align-items: baseline; font-size: 13px; }
+  .does dt { color: var(--text); }
+  .does dd { margin: 0; color: var(--muted); }
+  .does kbd { height: 20px; font-size: 12px; }
+  .panel-foot { display: flex; align-items: center; gap: 16px; padding: 14px var(--pad); border-top: 1px solid var(--rule); }
+
+  .models { width: 100%; border-collapse: separate; border-spacing: 0; padding: 0; overflow: hidden; }
+  .models th { font-size: 12px; font-weight: 400; color: var(--muted); text-align: left; padding: 10px 16px 8px; }
+  .models th.num, .models td.num { text-align: right; white-space: nowrap; }
+  .models td { padding: 12px 16px; border-top: 1px solid var(--rule); vertical-align: middle; }
+  .models tr.selected td { background: var(--raised); }
+  .models .act { text-align: right; width: 140px; }
   .model { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
   .model input { margin-top: 4px; }
-  .model strong, .choice strong, .label { font-weight: 500; }
-  .progress { display: flex; align-items: center; gap: 8px; }
-  .progress progress { width: 100px; }
-  .choices { display: grid; gap: 6px; }
-  .choice { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-card); cursor: pointer; }
-  .choice input { margin-top: 3px; }
+  .model strong, .choice strong { font-weight: 500; }
+  .progress { display: inline-flex; align-items: center; gap: 8px; }
+  .progress progress { width: 80px; }
+
+  .output { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: stretch; }
+  .choices { display: grid; gap: 6px; grid-auto-rows: 1fr; }
+  .choice { display: flex; align-items: center; gap: 10px; padding: 0 12px; min-height: 44px; border: 1px solid var(--border); border-radius: var(--radius-card); cursor: pointer; background: var(--surface); }
   .choice.selected { border-color: var(--text); }
+  .result { margin: 0; display: flex; flex-direction: column; gap: 12px; background: var(--raised); border-color: transparent; }
+  .result-title { font-size: 12px; color: var(--muted); }
+  .result dt { font-size: 12px; color: var(--muted); }
+  .result dd { margin: 2px 0 0; display: flex; align-items: center; gap: 6px; font-weight: 500; }
+  .result dd :global(.icon) { color: var(--data); }
+
   .joined { display: flex; }
   .joined input { border-top-right-radius: 0; border-bottom-right-radius: 0; }
   .joined button { height: auto; border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; }
-  .ok-text { color: var(--data); }
-  .version { display: flex; align-items: center; gap: 16px; padding: 14px 16px; }
+  q { color: var(--text); }
+  .version { display: flex; align-items: center; gap: 16px; padding: 16px var(--pad); }
   .version strong { font-weight: 600; }
+
+  @media (max-width: 820px) {
+    .settings { grid-template-columns: 1fr; gap: 16px; }
+    .areas { position: static; flex-direction: row; flex-wrap: wrap; }
+    .areas-title { display: none; }
+    .output { grid-template-columns: 1fr; }
+  }
 </style>

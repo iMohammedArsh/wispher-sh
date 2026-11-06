@@ -11,6 +11,9 @@ use crate::error::AppResult;
 pub struct SttRequest {
     /// "auto" or a Whisper language code.
     pub language: String,
+    /// With "auto": the only languages detection may choose, main language
+    /// first. Empty means any language.
+    pub languages: Vec<String>,
     /// Model id from [`models::CATALOG`].
     pub model: String,
     /// Names and jargon to bias recognition toward.
@@ -20,8 +23,39 @@ pub struct SttRequest {
 /// Speech-to-text. Synchronous: callers run it on a blocking thread.
 pub trait Transcriber: Send + Sync {
     fn transcribe(&self, samples: &[f32], request: &SttRequest) -> AppResult<String>;
+    /// The language this audio would be transcribed in: `request.language`
+    /// unless that's "auto", then a detected code (or "auto" if detection
+    /// isn't possible). Lets a voice note keep one language throughout.
+    fn resolve_language(&self, _samples: &[f32], request: &SttRequest) -> String {
+        request.language.clone()
+    }
     /// Load the model ahead of time so the first dictation is fast.
     fn warm_up(&self, _model: &str) {}
+}
+
+/// How much of the allowed languages' combined probability a language other
+/// than the main one needs before it's chosen. Below this, detection is
+/// "unsure" and the main language wins.
+const SURE_SHARE: f32 = 0.7;
+
+/// Choose a language from Whisper's detection scores (code, probability).
+///
+/// With no allowed list it's the plain best guess. With one, only those
+/// languages are considered, so a Malaysian accent can't turn English into
+/// Malay when Malay isn't on the list, and the first (main) language wins
+/// unless another is clearly ahead.
+pub fn pick_language(scores: &[(&str, f32)], allowed: &[String]) -> String {
+    let score = |code: &str| scores.iter().find(|(c, _)| *c == code).map_or(0.0, |(_, p)| *p);
+    let allowed: Vec<&str> = allowed.iter().map(|c| c.trim()).filter(|c| !c.is_empty() && *c != "auto").collect();
+    let Some(&main) = allowed.first() else {
+        return scores
+            .iter()
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map_or_else(|| "auto".to_string(), |(c, _)| c.to_string());
+    };
+    let total: f32 = allowed.iter().map(|c| score(c)).sum();
+    let (best, p) = allowed.iter().map(|c| (*c, score(c))).max_by(|a, b| a.1.total_cmp(&b.1)).unwrap_or((main, 0.0));
+    if total > 0.0 && best != main && p / total >= SURE_SHARE { best.to_string() } else { main.to_string() }
 }
 
 /// Whisper sometimes "hears" these on near-silent audio.
@@ -129,6 +163,30 @@ pub fn vocabulary_prompt(vocabulary: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn langs(codes: &[&str]) -> Vec<String> {
+        codes.iter().map(|c| c.to_string()).collect()
+    }
+
+    #[test]
+    fn accented_english_stays_english_when_malay_isnt_allowed() {
+        // Roughly what Whisper reports for English spoken with a Malaysian accent.
+        let scores = [("ms", 0.62), ("en", 0.30), ("id", 0.06), ("ml", 0.001)];
+        assert_eq!(pick_language(&scores, &[]), "ms");
+        assert_eq!(pick_language(&scores, &langs(&["en", "ml"])), "en");
+        assert_eq!(pick_language(&scores, &langs(&["ml", "en"])), "en"); // clearly ahead of the main language
+    }
+
+    #[test]
+    fn the_main_language_wins_when_detection_is_unsure() {
+        let scores = [("en", 0.40), ("ml", 0.45)];
+        assert_eq!(pick_language(&scores, &langs(&["en", "ml"])), "en");
+        let clear = [("en", 0.05), ("ml", 0.90)];
+        assert_eq!(pick_language(&clear, &langs(&["en", "ml"])), "ml");
+        assert_eq!(pick_language(&[], &langs(&["en", "ml"])), "en");
+        assert_eq!(pick_language(&[], &[]), "auto");
+        assert_eq!(pick_language(&scores, &langs(&["auto", ""])), "ml");
+    }
 
     #[test]
     fn stock_subtitle_phrases_are_dropped_but_real_thanks_stay() {

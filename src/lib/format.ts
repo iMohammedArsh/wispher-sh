@@ -116,3 +116,38 @@ export function calendarWeeks(activity: [string, number][], weeks: number, now =
   }
   return columns;
 }
+
+export interface DayTotal {
+  date: Date;
+  words: number;
+  isToday: boolean;
+}
+
+/** The last `count` days ending today, oldest first, with words per day (0 when quiet). */
+export function lastDays(activity: [string, number][], count: number, now = new Date()): DayTotal[] {
+  const words = new Map(activity);
+  const out: DayTotal[] = [];
+  for (let i = count - 1; i >= 0; i--) {
+    const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    out.push({ date, words: words.get(key) ?? 0, isToday: i === 0 });
+  }
+  return out;
+}
+
+/** A round axis top above `max`: 0 → 100, 870 → 1,000, 1,340 → 1,500. */
+export function niceCeiling(max: number): number {
+  if (max <= 0) return 100;
+  const step = 10 ** Math.floor(Math.log10(max));
+  for (const m of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * step >= max) return m * step;
+  return 10 * step;
+}
+
+/** "10:42 AM" today, "Yesterday", or "Tue" within a week, then "Nov 3". */
+export function shortWhen(ms: number, now = Date.now()): string {
+  const day = (t: number) => new Date(t).toDateString();
+  if (day(ms) === day(now)) return clockTime(ms);
+  if (day(ms) === day(now - 86_400_000)) return "Yesterday";
+  if (now - ms < 6 * 86_400_000) return new Date(ms).toLocaleDateString(undefined, { weekday: "short" });
+  return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}

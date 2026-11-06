@@ -32,12 +32,12 @@
 
   --radius-card: 8px;
   --radius-control: 6px;
-  --gap: 12px;
+  --gap: 16px;
   --pad: 20px;
   --control-height: 32px;
   --fs-title: 22px;
-  --fs-section: 15px;
-  --fs-figure: 24px;
+  --fs-section: 16px;
+  --fs-figure: 22px;
   --fs-body: 14px;
   --fs-small: 12px;
 
@@ -80,7 +80,7 @@
 html, body { margin: 0; height: 100%; }
 body { overflow: hidden; }
 h1, h2, h3 { margin: 0; letter-spacing: -0.01em; }
-h1 { font-size: var(--fs-title); font-weight: 650; line-height: 1.2; }
+h1 { font-size: var(--fs-title); font-weight: 600; line-height: 1.2; }
 h2 { font-size: var(--fs-section); font-weight: 600; line-height: 1.3; }
 h3 { font-size: var(--fs-body); font-weight: 600; }
 p { margin: 0; }
@@ -98,7 +98,7 @@ button {
   background: var(--surface);
   border-radius: var(--radius-control);
   padding: 0 12px;
-  font-size: 13.5px; font-weight: 500;
+  font-size: 13px; font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
   transition: background 120ms, border-color 120ms, transform 80ms;
@@ -112,7 +112,7 @@ button.primary:disabled { background: var(--active); border-color: var(--active)
 button.ghost { border-color: transparent; background: transparent; color: var(--muted); padding: 0 8px; }
 button.ghost:hover:not(:disabled) { background: var(--active); border-color: transparent; color: var(--text); }
 button.danger { color: var(--negative); }
-button.small { height: 26px; font-size: 12.5px; padding: 0 8px; }
+button.small { height: 26px; font-size: 12px; padding: 0 8px; }
 button.live { background: var(--live); border-color: var(--live); color: #fff; }
 button.live:hover:not(:disabled) { background: color-mix(in srgb, var(--live) 88%, #000); }
 button svg, .icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
@@ -152,7 +152,7 @@ progress { accent-color: var(--data); height: 6px; }
 
 /* ---- page frame ------------------------------------------------------------ */
 
-.page { display: flex; flex-direction: column; gap: 24px; max-width: 920px; }
+.page { display: flex; flex-direction: column; gap: 24px; max-width: 1040px; }
 .title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .title-row .sub { margin-top: 4px; color: var(--muted); }
 .title-row .actions { display: flex; gap: 8px; flex: none; }
@@ -205,7 +205,7 @@ progress { accent-color: var(--data); height: 6px; }
 .clamp-2 { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; }
 .pill {
   display: inline-flex; align-items: center; gap: 4px; flex: none; white-space: nowrap;
-  height: 20px; font-size: 11.5px; font-weight: 500; padding: 0 8px; border-radius: 999px;
+  height: 20px; font-size: 12px; font-weight: 500; padding: 0 8px; border-radius: 999px;
   background: var(--pill-neutral-bg); color: var(--pill-neutral-ink);
 }
 .pill.ok { background: var(--pill-positive-bg); color: var(--pill-positive-ink); }
@@ -214,13 +214,13 @@ progress { accent-color: var(--data); height: 6px; }
 .notice {
   display: flex; gap: 12px; align-items: center;
   border: 1px solid var(--warning-line); background: var(--pill-warning-bg); color: var(--pill-warning-ink);
-  border-radius: var(--radius-card); padding: 10px 14px; font-size: 13.5px;
+  border-radius: var(--radius-card); padding: 10px 14px; font-size: 13px;
 }
 .notice.bad { border-color: color-mix(in srgb, var(--negative) 30%, transparent); background: var(--pill-negative-bg); color: var(--pill-negative-ink); }
 .notice button { flex: none; }
 .empty {
   border: 1px dashed var(--control); border-radius: var(--radius-card);
-  padding: 14px 16px; color: var(--muted); font-size: 13.5px;
+  padding: 14px 16px; color: var(--muted); font-size: 13px;
 }
 kbd {
   font: 500 12px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
@@ -233,3 +233,22 @@ kbd {
 .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--live); flex: none; animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { *, *::after { transition: none !important; animation: none !important; } }
+
+/* ---- floating menus (the only resting things besides the toast with a shadow) ---- */
+.popover {
+  position: absolute; z-index: 20; min-width: 220px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.12); padding: 4px;
+  animation: popover-in 120ms ease-out;
+}
+.popover .popover-title { font-size: var(--fs-small); color: var(--muted); padding: 6px 8px 4px; }
+.popover > button, .popover .item {
+  width: 100%; height: auto; min-height: 32px; padding: 6px 8px; gap: 8px;
+  justify-content: flex-start; text-align: left; border: none; background: transparent; font-weight: 400;
+}
+.popover > button:hover:not(:disabled) { background: var(--active); }
+.popover .item-label { display: block; font-weight: 500; color: var(--text); }
+.popover .item-hint { display: block; font-size: var(--fs-small); color: var(--muted); }
+@keyframes popover-in { from { opacity: 0; transform: translateY(-3px); } }
+.spinner { width: 13px; height: 13px; border-radius: 50%; border: 1.6px solid var(--control); border-top-color: var(--text); animation: spin 700ms linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }

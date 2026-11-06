@@ -69,6 +69,11 @@ export type HistoryItem = {
 	id: number,
 	created_at: number,
 	text: string,
+	/**
+	 *  What Whisper heard, before clean-up, polish and dictionary fixes.
+	 *  The same as `text` for rows saved before it was recorded.
+	 */
+	raw: string,
 	app: string,
 	style: string,
 	delivery: string,
@@ -160,6 +165,11 @@ export type Settings_Deserialize = {
 	keep_mic_warm?: boolean,
 	/**  "auto", or a Whisper language code such as "en" or "ml". */
 	language?: string,
+	/**
+	 *  With "auto": the languages detection may choose from, main language
+	 *  first (used when detection is unsure). Empty means any language.
+	 */
+	languages?: string[],
 	/**  Model id from the catalog in `stt::models`. */
 	model?: string,
 	delivery?: DeliveryMode,
@@ -197,6 +207,11 @@ export type Settings_Serialize = {
 	keep_mic_warm: boolean,
 	/**  "auto", or a Whisper language code such as "en" or "ml". */
 	language: string,
+	/**
+	 *  With "auto": the languages detection may choose from, main language
+	 *  first (used when detection is unsure). Empty means any language.
+	 */
+	languages: string[],
 	/**  Model id from the catalog in `stt::models`. */
 	model: string,
 	delivery: DeliveryMode,

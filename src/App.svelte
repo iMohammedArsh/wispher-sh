@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { app, type Route } from "./lib/state.svelte";
-  import { shortcutLabel } from "./lib/format";
+  import { app, type Route, type SettingsArea } from "./lib/state.svelte";
+  import { duration, shortcutLabel } from "./lib/format";
   import { inTauri } from "./lib/ipc";
   import Icon, { type IconName } from "./components/Icon.svelte";
   import Mark from "./components/Mark.svelte";
@@ -37,8 +37,18 @@
   onMount(() => {
     app.init();
     // Browser preview (vite dev without Tauri): open a screen from the URL, e.g. main.html#notes.
-    const hash = location.hash.slice(1) as Route;
-    if (!inTauri && hash) app.route = hash;
+    // A Settings view opens as main.html#settings/speech.
+    const [route, area] = location.hash.slice(1).split("/") as [Route, SettingsArea | undefined];
+    if (!inTauri && route) app.route = route;
+    if (!inTauri && area) app.settingsArea = area;
+  });
+
+  // A ticking clock, only while recording, for the status line's timer.
+  let now = $state(Date.now());
+  $effect(() => {
+    if (app.status.phase !== "recording") return;
+    const timer = setInterval(() => (now = Date.now()), 500);
+    return () => clearInterval(timer);
   });
 
   const showOnboarding = $derived(app.settings !== null && !app.settings.onboarding_done);
@@ -69,6 +79,7 @@
             <Icon name={item.icon} />
             {item.label}
             {#if item.id === "notes" && phase === "recording" && app.status.kind === "note"}<span class="live-dot" title="Recording"></span>{/if}
+            {#if item.id === "dictionary" && app.pendingSuggestions}<span class="count num" title="{app.pendingSuggestions} suggestions to review">{app.pendingSuggestions}</span>{/if}
           </button>
         {/each}
       {/each}
@@ -92,6 +103,7 @@
       <div class="state" title="Dictation status" aria-live="polite">
         <span class="dot {phase}"></span>
         <span class="grow">{statusText}</span>
+        {#if phase === "recording" && app.status.started_at}<span class="num">{duration(Math.max(0, now - app.status.started_at))}</span>{/if}
         {#if phase === "idle" && app.settings}<kbd>{shortcutLabel(app.settings.dictate_shortcut, app.platform)}</kbd>{/if}
       </div>
     </div>
@@ -119,17 +131,17 @@
   </main>
 
   {#if app.toast}
-    <div class="toast {app.toast.kind}" role="status">{app.toast.text}</div>
+    <div class="toast-lane"><div class="toast {app.toast.kind}" role="status">{app.toast.text}</div></div>
   {/if}
 </div>
 
 <style>
-  .shell { display: grid; grid-template-columns: 212px 1fr; height: 100vh; }
+  .shell { --sidebar: 212px; display: grid; grid-template-columns: var(--sidebar) 1fr; height: 100vh; }
   aside { display: flex; flex-direction: column; padding: 0 10px 12px; min-height: 0; }
   .drag { height: 14px; flex: none; }
   [data-platform="macos"] aside .drag { height: 38px; }
   main .drag.top { position: sticky; top: 0; height: 0; }
-  .brand { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 15px; letter-spacing: -0.01em; padding: 2px 10px 18px; }
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 16px; letter-spacing: -0.01em; padding: 2px 10px 18px; }
   nav { display: flex; flex-direction: column; gap: 2px; }
   .group { font-size: 12px; color: var(--muted); padding: 18px 10px 6px; }
   nav button, .foot > button {
@@ -142,13 +154,14 @@
   nav button.active, .foot > button.active { background: var(--active); font-weight: 500; }
   nav button.active :global(.icon), .foot > button.active :global(.icon) { color: var(--text); }
   nav .live-dot { margin-left: auto; }
+  nav .count { margin-left: auto; font-size: 12px; color: var(--muted); min-width: 20px; height: 18px; padding: 0 6px; border-radius: 999px; background: var(--pill-neutral-bg); display: inline-flex; align-items: center; justify-content: center; }
   .foot { margin-top: auto; display: flex; flex-direction: column; gap: 6px; }
   .update { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 2px 4px; padding: 10px 10px 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--surface); font-size: 13px; }
   .update strong { display: block; font-weight: 600; }
   .update .small { display: block; }
   .update progress { width: 56px; }
-  .state { display: flex; align-items: center; gap: 8px; padding: 10px 10px 2px; font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--border); }
-  .state kbd { height: 20px; font-size: 11px; }
+  .state { display: flex; align-items: center; gap: 8px; padding: 10px 10px 2px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--border); }
+  .state kbd { height: 20px; font-size: 12px; }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--data); flex: none; }
   .dot.recording { background: var(--live); animation: pulse 1.2s ease-in-out infinite; }
   .dot.transcribing, .dot.polishing, .dot.delivering { background: var(--faint); animation: pulse 1s ease-in-out infinite; }
@@ -158,13 +171,14 @@
     background: var(--surface);
     border-left: 1px solid var(--border);
   }
+  .toast-lane { position: fixed; bottom: 20px; left: var(--sidebar); right: 0; display: flex; justify-content: center; pointer-events: none; }
   .toast {
-    position: fixed; bottom: 20px; left: calc(50% + 106px); transform: translateX(-50%);
+    pointer-events: auto;
     background: var(--primary); color: var(--primary-ink);
     padding: 9px 16px; border-radius: 8px; font-size: 13px; max-width: 60vw;
     box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
     animation: rise 160ms ease-out;
   }
   .toast.error { background: var(--negative); color: #fff; }
-  @keyframes rise { from { transform: translate(-50%, 6px); opacity: 0; } }
+  @keyframes rise { from { transform: translateY(6px); opacity: 0; } }
 </style>

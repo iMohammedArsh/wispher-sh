@@ -218,7 +218,16 @@ struct Recording {
 /// The background chunk transcriber of a voice note.
 struct NoteTask {
     stop: tokio::sync::watch::Sender<bool>,
-    chunks: JoinHandle<Vec<String>>,
+    chunks: JoinHandle<NoteChunks>,
+}
+
+/// What the chunk task hands back when a voice note stops.
+#[derive(Default)]
+struct NoteChunks {
+    texts: Vec<String>,
+    /// Detected from the first chunk with speech, then used for the rest of
+    /// the note so a long recording can't switch languages halfway.
+    language: Option<String>,
 }
 
 impl Recording {
@@ -472,12 +481,7 @@ fn recording_status(rec: &Recording) -> Status {
 /// pass over the whole recording, so nothing here can affect the result.
 fn spawn_preview(deps: &Deps, settings: &Settings) -> JoinHandle<()> {
     let (recorder, stt, ui) = (Arc::clone(&deps.recorder), Arc::clone(&deps.stt), Arc::clone(&deps.ui));
-    let dictionary = deps.store.dictionary().unwrap_or_default();
-    let request = SttRequest {
-        language: settings.language.clone(),
-        model: settings.model.clone(),
-        vocabulary: text::vocabulary(&dictionary),
-    };
+    let request = stt_request(settings, &deps.store.dictionary().unwrap_or_default());
     let options = text::Options { voice_commands: settings.voice_commands, remove_fillers: settings.remove_fillers };
     tokio::spawn(async move {
         let mut shown = String::new();
@@ -503,44 +507,56 @@ fn spawn_preview(deps: &Deps, settings: &Settings) -> JoinHandle<()> {
 }
 
 /// Notes mode: while recording, take ~30 s of audio at a time (cut at a pause),
-/// transcribe it, and report the transcript so far. Returns the chunks when
-/// told to stop, after finishing the one in flight.
+/// transcribe it, and report the transcript so far. The first chunk with
+/// speech fixes the note's language. Returns the chunks when told to stop,
+/// after finishing the one in flight.
 fn spawn_note_chunks(deps: &Deps, settings: &Settings) -> NoteTask {
     let (recorder, stt, ui) = (Arc::clone(&deps.recorder), Arc::clone(&deps.stt), Arc::clone(&deps.ui));
-    let request = stt_request(settings, &deps.store.dictionary().unwrap_or_default());
+    let mut request = stt_request(settings, &deps.store.dictionary().unwrap_or_default());
     let options = text::Options { voice_commands: settings.voice_commands, remove_fillers: settings.remove_fillers };
     let (stop, mut stopped) = tokio::sync::watch::channel(false);
     let chunks = tokio::spawn(async move {
-        let mut chunks: Vec<String> = Vec::new();
+        let mut out = NoteChunks::default();
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(NOTE_POLL) => {}
                 _ = stopped.changed() => break,
             }
-            let (recorder, stt, request) = (Arc::clone(&recorder), Arc::clone(&stt), request.clone());
+            let (recorder, stt, chunk_request) = (Arc::clone(&recorder), Arc::clone(&stt), request.clone());
+            let lock = out.language.is_none();
             let heard = tokio::task::spawn_blocking(move || {
                 let captured = recorder.drain(NOTE_CHUNK_SECONDS)?;
                 if !captured.has_speech {
-                    return Some(Ok(String::new()));
+                    return Some((None, Ok(String::new())));
                 }
-                Some(stt.transcribe(&captured.samples, &request))
+                let mut chunk_request = chunk_request;
+                let language = lock.then(|| stt.resolve_language(&captured.samples, &chunk_request));
+                if let Some(language) = &language {
+                    chunk_request.language = language.clone();
+                }
+                Some((language, stt.transcribe(&captured.samples, &chunk_request)))
             })
             .await
             .ok()
             .flatten();
+            let Some((language, heard)) = heard else { continue };
+            if let Some(language) = language.filter(|l| l != "auto") {
+                tracing::info!("Voice note language: {language}");
+                request.language = language.clone();
+                out.language = Some(language);
+            }
             match heard {
-                Some(Ok(heard)) => {
+                Ok(heard) => {
                     let text = text::clean(&heard, &options);
                     if !text.is_empty() {
-                        chunks.push(text);
-                        ui.note_progress(&chunks.join("\n\n"));
+                        out.texts.push(text);
+                        ui.note_progress(&out.texts.join("\n\n"));
                     }
                 }
-                Some(Err(error)) => tracing::warn!("A voice note chunk couldn't be transcribed: {error}"),
-                None => {}
+                Err(error) => tracing::warn!("A voice note chunk couldn't be transcribed: {error}"),
             }
         }
-        chunks
+        out
     });
     NoteTask { stop, chunks }
 }
@@ -558,7 +574,7 @@ async fn process_note(deps: &Deps, job: Job, note: NoteTask) {
     deps.ui.status(&status(Phase::Transcribing));
 
     let _ = note.stop.send(true);
-    let mut chunks = note.chunks.await.unwrap_or_default();
+    let NoteChunks { texts: mut chunks, language } = note.chunks.await.unwrap_or_default();
     let recorder = Arc::clone(&deps.recorder);
     let rest = match blocking(move || recorder.stop()).await {
         Ok(rest) => rest,
@@ -570,7 +586,11 @@ async fn process_note(deps: &Deps, job: Job, note: NoteTask) {
     let settings = deps.settings.get();
     let dictionary = deps.store.dictionary().unwrap_or_default();
     if rest.has_speech {
-        let (stt, request, samples) = (Arc::clone(&deps.stt), stt_request(&settings, &dictionary), rest.samples);
+        let mut request = stt_request(&settings, &dictionary);
+        if let Some(language) = language {
+            request.language = language;
+        }
+        let (stt, samples) = (Arc::clone(&deps.stt), rest.samples);
         match blocking(move || stt.transcribe(&samples, &request)).await {
             Ok(heard) => {
                 let options = text::Options { voice_commands: settings.voice_commands, remove_fillers: settings.remove_fillers };
@@ -662,7 +682,12 @@ fn spawn_field_learning(deps: &Deps, target: AppTarget, pasted: String) {
 }
 
 fn stt_request(settings: &Settings, dictionary: &[store::DictionaryEntry]) -> SttRequest {
-    SttRequest { language: settings.language.clone(), model: settings.model.clone(), vocabulary: text::vocabulary(dictionary) }
+    SttRequest {
+        language: settings.language.clone(),
+        languages: settings.languages.clone(),
+        model: settings.model.clone(),
+        vocabulary: text::vocabulary(dictionary),
+    }
 }
 
 /// A History item rewritten in another style.
@@ -745,11 +770,7 @@ async fn process(deps: &Deps, job: Job) {
 
     let settings = deps.settings.get();
     let dictionary = deps.store.dictionary().unwrap_or_default();
-    let request = SttRequest {
-        language: settings.language.clone(),
-        model: settings.model.clone(),
-        vocabulary: text::vocabulary(&dictionary),
-    };
+    let request = stt_request(&settings, &dictionary);
     let stt = Arc::clone(&deps.stt);
     let samples = captured.samples;
     let raw = match blocking(move || stt.transcribe(&samples, &request)).await {
@@ -918,10 +939,21 @@ mod tests {
         }
     }
 
-    struct FakeStt(String);
+    #[derive(Default)]
+    struct FakeStt {
+        text: String,
+        /// The language each transcription was asked for.
+        languages: Mutex<Vec<String>>,
+        /// What successive language detections return.
+        detections: Mutex<std::collections::VecDeque<String>>,
+    }
     impl Transcriber for FakeStt {
-        fn transcribe(&self, _: &[f32], _: &SttRequest) -> AppResult<String> {
-            Ok(self.0.clone())
+        fn transcribe(&self, _: &[f32], request: &SttRequest) -> AppResult<String> {
+            self.languages.lock().push(request.language.clone());
+            Ok(self.text.clone())
+        }
+        fn resolve_language(&self, _: &[f32], request: &SttRequest) -> String {
+            self.detections.lock().pop_front().unwrap_or_else(|| request.language.clone())
         }
     }
 
@@ -991,6 +1023,7 @@ mod tests {
         recorder: Arc<FakeRecorder>,
         desktop: Arc<FakeDesktop>,
         ui: Arc<FakeUi>,
+        stt: Arc<FakeStt>,
         store: Arc<Store>,
         settings: Arc<SettingsStore>,
     }
@@ -1003,9 +1036,10 @@ mod tests {
         let settings = Arc::new(SettingsStore::load(Arc::clone(&store)));
         let settings_handle = Arc::clone(&settings);
         let polisher: Arc<dyn Polisher> = Arc::new(FakePolisher(polish));
+        let stt = Arc::new(FakeStt { text: transcript.into(), ..FakeStt::default() });
         let controller = Controller::spawn(Deps {
             recorder: recorder.clone(),
-            stt: Arc::new(FakeStt(transcript.into())),
+            stt: stt.clone(),
             desktop: desktop.clone(),
             polisher: Arc::new(move |_| Arc::clone(&polisher)),
             ui: ui.clone(),
@@ -1014,7 +1048,7 @@ mod tests {
             recording: Arc::new(AtomicBool::new(false)),
             own_pid: 1,
         });
-        Harness { controller, recorder, desktop, ui, store, settings: settings_handle }
+        Harness { controller, recorder, desktop, ui, stt, store, settings: settings_handle }
     }
 
     impl Harness {
@@ -1103,6 +1137,22 @@ mod tests {
         let last = h.ui.statuses.lock().last().cloned().unwrap();
         assert_eq!((last.phase, last.kind), (Phase::Done, Kind::Note));
         assert!(h.store.history("", 10).unwrap().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn voice_note_keeps_the_language_of_its_first_chunk() {
+        let h = harness("the constitution gives the agong his powers", None);
+        h.settings.save(Settings { languages: vec!["en".into(), "ml".into()], ..Settings::default() }).unwrap();
+        // Later detections would disagree; they must never be asked.
+        *h.stt.detections.lock() = ["en", "ml", "ml"].map(String::from).into();
+        *h.recorder.chunks.lock() = 2;
+
+        h.send(Input::Note);
+        tokio::time::sleep(Duration::from_millis(3_500)).await;
+        h.send(Input::Note);
+        settle().await;
+        assert_eq!(*h.stt.languages.lock(), vec!["en", "en", "en"], "two chunks and the tail, all in English");
+        assert_eq!(h.stt.detections.lock().len(), 2, "detected once, from the first chunk");
     }
 
     #[tokio::test(start_paused = true)]

@@ -135,6 +135,14 @@
         <p class="empty small">{query ? "No note matches that search." : "Notes you record appear here."}</p>
       {:else}
         <ul>
+          {#if noteActive}
+            <li>
+              <button class="selected live-row" aria-current="true">
+                <span class="name"><span class="live-dot"></span>{recordingNote ? "Recording" : "Finishing…"}</span>
+                <span class="small muted num">Now{recordingNote ? ` · ${duration(now - status.started_at)}` : ""}</span>
+              </button>
+            </li>
+          {/if}
           {#each notes as note (note.id)}
             <li>
               <button class:selected={note.id === selectedId && !noteActive} onclick={() => (selectedId = note.id)}>
@@ -190,7 +198,7 @@
         {#if selected.summary}
           <section aria-label="Key points">
           <h3 class="label">Key points</h3>
-          <div class="well summary">
+          <div class="summary">
             {#each groups(summaryBlocks(selected.summary)) as group}
               {#if group.heading}<h3>{group.heading}</h3>{/if}
               <ul>
@@ -235,12 +243,13 @@
   }
   .list button:hover:not(.selected) { background: var(--raised); }
   .list button.selected { background: var(--active); }
+  .live-row .name { display: flex; align-items: center; gap: 8px; }
   .name { font-weight: 500; font-size: 14px; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .detail { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
   .title-input {
     border: 1px solid transparent; background: transparent; padding: 2px 6px; margin: -3px -7px;
-    font-size: 19px; font-weight: 650; letter-spacing: -0.01em; min-height: 0; width: calc(100% + 14px);
+    font-size: 22px; font-weight: 600; letter-spacing: -0.01em; min-height: 0; width: calc(100% + 14px);
   }
   .title-input:hover { border-color: var(--border); }
   .meta { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -248,11 +257,12 @@
   .summary h3:first-child { margin-top: 0; }
   .summary ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; }
   .summary li.plain { list-style: none; margin-left: -18px; }
-  .summary li::marker { color: var(--data); }
+  .summary li::marker { color: var(--muted); }
+  .summary { max-width: 68ch; padding-bottom: 4px; border-bottom: 1px solid var(--rule); padding-bottom: 16px; }
   .label { font-size: 13px; color: var(--muted); font-weight: 500; margin-bottom: 8px; }
   .transcript { display: flex; flex-direction: column; gap: 12px; line-height: 1.6; max-width: 68ch; user-select: text; }
   .live-head { display: flex; align-items: center; gap: 10px; }
-  .clock { font-size: 15px; }
+  .clock { font-size: 16px; }
   .live-text { padding: 16px 18px; border-radius: var(--radius-card); background: var(--raised); min-height: 120px; }
   .first { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding: 24px; border: 1px dashed var(--control); border-radius: var(--radius-card); }
   .first p { max-width: 56ch; }

@@ -153,6 +153,12 @@ pub fn history(state: State<AppState>, query: String, limit: Option<i64>) -> App
     state.store.history(&query, limit.unwrap_or(200))
 }
 
+/// The newest dictations by time, pinned or not (Home's "Last dictation").
+#[tauri::command]
+pub fn history_recent(state: State<AppState>, limit: i64) -> AppResult<Vec<HistoryItem>> {
+    state.store.recent_history(limit)
+}
+
 /// Saving an edit also learns from it (as suggestions the user can approve).
 #[tauri::command]
 pub fn history_update(state: State<AppState>, id: i64, text: String) -> AppResult<usize> {
@@ -184,6 +190,16 @@ pub async fn history_restyle(state: State<'_, AppState>, id: i64, style: Style) 
     let polisher = state.polisher_for(&settings);
     let restyled = crate::controller::restyle(&source, style, &settings, &dictionary, polisher.as_ref()).await?;
     state.store.restyle_history(id, &restyled.text, style.id())?;
+    Ok(RestyleResult { text: restyled.text, polished: restyled.polished })
+}
+
+/// Run spoken text through a style without saving anything (the Styles screen's "Try it").
+#[tauri::command]
+pub async fn style_try(state: State<'_, AppState>, style: Style, text: String) -> AppResult<RestyleResult> {
+    let settings = state.settings.get();
+    let dictionary = state.store.dictionary()?;
+    let polisher = state.polisher_for(&settings);
+    let restyled = crate::controller::restyle(&text, style, &settings, &dictionary, polisher.as_ref()).await?;
     Ok(RestyleResult { text: restyled.text, polished: restyled.polished })
 }
 
