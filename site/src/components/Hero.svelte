@@ -48,7 +48,7 @@
     <div class="hero-foot">
       <p>Hams is a free Mac app. Hold <kbd>⌘</kbd><kbd>⇧</kbd><kbd>Space</kbd> in any app, speak, let go, and clean text appears at your cursor.</p>
       <div class="hero-actions">
-        <a class="button" href={DMG}>Download for Mac</a>
+        <a class="button voice" href={DMG}>Download for Mac</a>
         <a class="link" href="#get">or install with one line</a>
       </div>
     </div>

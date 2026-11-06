@@ -9,5 +9,5 @@
     <a class="link" href="#privacy">Privacy</a>
     <a class="link" href="#faq">Questions</a>
   </nav>
-  <a class="button small" href={DMG}>Download</a>
+  <a class="button small voice" href={DMG}>Download</a>
 </header>

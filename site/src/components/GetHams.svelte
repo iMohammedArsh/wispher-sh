@@ -19,9 +19,9 @@
   <h2 id="cta-title" class="display cta-title"><span>Ready</span> <span>to talk?</span></h2>
   <div class="cta-choice">
     <div class="cta-row">
-      <a class="button light" href={DMG}>Download for Mac</a>
+      <a class="button" href={DMG}>Download for Mac</a>
       <span class="or">or</span>
-      <button type="button" class="button green" onclick={copy}>{copied ? "Copied" : "Copy the Terminal line"}</button>
+      <button type="button" class="button light" onclick={copy}>{copied ? "Copied" : "Copy the Terminal line"}</button>
     </div>
     <pre class="install"><code>{INSTALL_COMMAND}</code></pre>
     <p>
