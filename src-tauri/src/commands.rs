@@ -36,7 +36,7 @@ pub enum Platform {
 #[tauri::command]
 pub fn get_settings(state: State<AppState>) -> SettingsView {
     let settings = state.settings.get();
-    let has_api_key = settings::get_secret(settings.ai.provider.keychain_account()).is_some();
+    let has_api_key = settings::has_secret(settings.ai.provider.keychain_account());
     SettingsView {
         settings,
         has_api_key,

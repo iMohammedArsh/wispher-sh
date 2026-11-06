@@ -253,6 +253,31 @@ fn read_secret(service: &str, account: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// Whether a key is stored, without reading it. On macOS this asks the keychain
+/// for the item's attributes only: reading the secret itself makes macOS ask for
+/// the login password whenever the app's signature differs from the one that
+/// saved it, and this is called every time the settings load.
+pub fn has_secret(account: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use security_framework::item::{ItemClass, ItemSearchOptions};
+        [KEYCHAIN_SERVICE, LEGACY_KEYCHAIN_SERVICE].iter().any(|service| {
+            ItemSearchOptions::new()
+                .class(ItemClass::generic_password())
+                .service(service)
+                .account(account)
+                .load_attributes(true)
+                .limit(1)
+                .search()
+                .is_ok_and(|found| !found.is_empty())
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        get_secret(account).is_some()
+    }
+}
+
 pub fn get_secret(account: &str) -> Option<String> {
     if let Some(secret) = read_secret(KEYCHAIN_SERVICE, account) {
         return Some(secret);
@@ -281,6 +306,11 @@ mod tests {
         let settings: Settings = serde_json::from_str(r#"{"language":"ml","future_field":1}"#).unwrap();
         assert_eq!(settings.language, "ml");
         assert_eq!(settings.model, "small");
+    }
+
+    #[test]
+    fn has_secret_is_false_for_a_missing_key() {
+        assert!(!has_secret("hams-test-account-that-does-not-exist"));
     }
 
     #[test]
