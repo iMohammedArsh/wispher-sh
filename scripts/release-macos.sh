@@ -23,6 +23,10 @@ IDENTITY_NAME="Hams Local Signing"
 if [[ -z "${APPLE_SIGNING_IDENTITY:-}" ]] && security find-identity -v -p codesigning | grep -q "$IDENTITY_NAME"; then
   export APPLE_SIGNING_IDENTITY="$IDENTITY_NAME"
 fi
+# Otherwise sign ad-hoc ("-"). Tauri then signs with the hardened runtime and
+# src-tauri/Entitlements.plist, which the microphone needs, before it makes the
+# DMG and the update archive.
+export APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:--}"
 
 version=$(node -p 'require("./src-tauri/tauri.conf.json").version')
 tag="v$version"
@@ -39,7 +43,7 @@ if gh release view "$tag" --repo "$REPO" >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "==> Building Hams $version, universal (signed with: ${APPLE_SIGNING_IDENTITY:-ad-hoc})"
+echo "==> Building Hams $version, universal (signed with: $APPLE_SIGNING_IDENTITY)"
 npm ci --silent
 npm run tauri build -- --target universal-apple-darwin --bundles app,dmg
 
@@ -47,6 +51,8 @@ bundle="src-tauri/target/universal-apple-darwin/release/bundle"
 archive="$bundle/macos/Hams.app.tar.gz"
 [[ -f "$archive" && -f "$archive.sig" ]] || { echo "Update archive or signature missing in $bundle/macos" >&2; exit 1; }
 dmg=$(ls "$bundle"/dmg/*.dmg | head -1)
+codesign -d --entitlements - "$bundle/macos/Hams.app" 2>&1 | grep -q com.apple.security.device.audio-input \
+  || { echo "$bundle/macos/Hams.app was signed without the microphone entitlement (src-tauri/Entitlements.plist)" >&2; exit 1; }
 
 out="src-tauri/target/universal-apple-darwin/release/update"
 rm -rf "$out" && mkdir -p "$out"

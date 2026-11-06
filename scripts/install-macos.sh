@@ -15,7 +15,11 @@ IDENTITY_NAME="Hams Local Signing"
 if [[ -z "${APPLE_SIGNING_IDENTITY:-}" ]] && security find-identity -v -p codesigning | grep -q "$IDENTITY_NAME"; then
   export APPLE_SIGNING_IDENTITY="$IDENTITY_NAME"
 fi
-echo "==> Signing with: ${APPLE_SIGNING_IDENTITY:-ad-hoc}"
+# Otherwise sign ad-hoc ("-"). Tauri then signs with the hardened runtime and
+# src-tauri/Entitlements.plist, which the microphone needs, before it makes the
+# DMG and the update archive.
+export APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:--}"
+echo "==> Signing with: $APPLE_SIGNING_IDENTITY"
 
 # Update signing: builds signed with ~/.tauri/hams.key can be offered as updates.
 # Without the key, build without the update archive instead of failing.
@@ -34,9 +38,8 @@ npm run tauri build -- "${build_args[@]}"
 
 app="src-tauri/target/release/bundle/macos/Hams.app"
 [[ -d "$app" ]] || { echo "Build output not found at $app" >&2; exit 1; }
-if [[ -z "${APPLE_SIGNING_IDENTITY:-}" ]]; then
-  codesign --force --deep --sign - "$app"
-fi
+codesign -d --entitlements - "$app" 2>&1 | grep -q com.apple.security.device.audio-input \
+  || { echo "$app was signed without the microphone entitlement (src-tauri/Entitlements.plist)" >&2; exit 1; }
 
 echo "==> Quitting the running Hams…"
 osascript -e 'tell application id "com.wusla.hams" to quit' >/dev/null 2>&1 || true
