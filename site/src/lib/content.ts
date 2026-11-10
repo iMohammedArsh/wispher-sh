@@ -55,41 +55,86 @@ export const EXAMPLES = [
   { label: "“…scratch that…”", text: "So, um, Tuesday at ten. Scratch that. Friday at ten." },
 ];
 
-export const FEATURES = [
+/** History, set as a board: what came in today, one dictation per row. `open` is the row shown open at load. */
+export type BoardRow = { app: string; time: string; words: number; style: string; status: "Pasted" | "Copied" | "Note"; raw: string; text: string };
+export const BOARD_OPEN = 3;
+export const BOARD: BoardRow[] = [
+  { app: "Linear", time: "8:52", words: 7, style: "Message", status: "Pasted", raw: "overlay jumps uh when live preview turns on", text: "Overlay jumps when live preview turns on" },
+  { app: "Slack", time: "9:26", words: 14, style: "Message", status: "Pasted", raw: "um pushed the overlay fix uh can you pull and check it on your intel machine", text: "Pushed the overlay fix, can you pull and check it on your Intel machine" },
+  { app: "Cursor", time: "9:39", words: 14, style: "Code", status: "Pasted", raw: "rename handle submit to commit prompt and keep the trailing debounce at 300 ms", text: "rename handle submit to commit prompt and keep the trailing debounce at 300 ms" },
+  { app: "Mail", time: "10:04", words: 11, style: "Email", status: "Pasted", raw: "hi priya thanks for the notes um yeah I'll send the draft by friday", text: "Hi Priya,\n\nThanks for the notes. I'll send the draft by Friday." },
+  { app: "Messages", time: "11:17", words: 9, style: "Message", status: "Pasted", raw: "Um, running like ten minutes late, uh, save me a seat.", text: "Running like ten minutes late, save me a seat" },
+  { app: "Notion", time: "12:30", words: 16, style: "Document", status: "Pasted", raw: "the launch moves from tuesday to friday so um the build gets two more days of testing", text: "The launch moves from Tuesday to Friday, so the build gets two more days of testing." },
+  { app: "Hams", time: "13:02", words: 3, style: "Message", status: "Copied", raw: "uh tauri spelled t a u r i", text: "Tauri spelled T-A-U-R-I" },
+  { app: "Design review", time: "14:00", words: 4212, style: "Note", status: "Note", raw: "okay so the main thing for thursday is that the overlay has to feel finished", text: "Okay, so the main thing for Thursday is that the overlay has to feel finished." },
+  { app: "WhatsApp", time: "18:45", words: 9, style: "Message", status: "Pasted", raw: "landing at six um no need to pick me up", text: "Landing at six, no need to pick me up" },
+];
+
+/** What you can switch on, each shown working when it's on. */
+export type Switch = {
+  id: string;
+  says: string;
+  then: string;
+  on: boolean;
+  show: { raw: string; text: string } | { src: string; width: number; height: number; alt: string; focus: string };
+};
+export const SWITCHES: Switch[] = [
   {
-    title: "Polite in Mail, brief in Messages",
-    body: "Hams sees which app you’re in. Email gets full sentences and a greeting on its own line, chat stays short, and code editors get exactly what you said. You can rewrite each style or pin an app to one.",
-    image: { src: "img/styles.jpg", width: 1340, height: 893, max: 640, alt: "The Styles screen in Hams: the Messaging style, its instructions for the AI and a Try it panel." },
+    id: "polish",
+    says: "Polish it with AI",
+    then: "One call to the provider you pick, with your own key. Grammar and punctuation fixed, your words kept.",
+    on: false,
+    show: { raw: "so um i think we should uh move the launch to friday because the the build isn't ready", text: "I think we should move the launch to Friday, because the build isn't ready." },
   },
   {
-    title: "Long talks become notes",
-    body: "Record a lecture or a meeting for as long as it runs. Hams writes it down half a minute at a time while you listen, then saves the transcript with a title and the key points.",
-    image: { src: "img/notes.jpg", width: 1260, height: 1008, max: 540, alt: "A voice note in Hams: key points and action items above the full transcript." },
+    id: "styles",
+    says: "Write the way each app expects",
+    then: "Email gets a greeting on its own line, chat stays short, and code editors get exactly what you said.",
+    on: true,
+    show: { src: "img/styles.jpg", width: 1340, height: 893, alt: "The Styles screen in Hams: the Messaging style and its instructions for the AI.", focus: "50% 20%" },
   },
   {
-    title: "It learns how you spell things",
-    body: "If Hams keeps writing “tory” when you mean Tauri, teach it once. Fix a word in History and it suggests the change for next time.",
-    image: { src: "img/dictionary.jpg", width: 1680, height: 1260, max: 600, alt: "The Dictionary in Hams: learned spellings waiting for approval, and your words." },
+    id: "learn",
+    says: "Learn how I spell names",
+    then: "Teach “Tauri” once and Hams stops writing “tory”. Fix a word in History and it suggests the change.",
+    on: false,
+    show: { src: "img/dictionary.jpg", width: 1680, height: 1260, alt: "The Dictionary in Hams: learned spellings waiting for approval, and your words.", focus: "50% 0%" },
   },
   {
-    title: "Every dictation, kept and searchable",
-    body: "History shows what was heard and what was written, side by side. Copy one again, rewrite it as an email, or pin it.",
-    image: { src: "img/history.jpg", width: 1830, height: 780, max: 760, alt: "A dictation opened in History, showing what was heard and what was written." },
+    id: "notes",
+    says: "Turn long talks into notes",
+    then: "A 38-minute meeting comes back as a title, the key points and the whole transcript.",
+    on: true,
+    show: { src: "img/notes.jpg", width: 1260, height: 1008, alt: "A voice note in Hams: key points and action items above the full transcript.", focus: "50% 0%" },
   },
   {
-    title: "Your languages, and only yours",
-    body: "English, Malayalam, Malay, Hindi, Tamil, Arabic and more, mixed if you like. Tick the ones you speak, so a strong accent can’t turn your English into another language.",
-    image: { src: "img/speech.jpg", width: 1420, height: 640, max: 620, alt: "Speech settings in Hams with English and Malayalam ticked as the languages you speak." },
+    id: "languages",
+    says: "Only hear the languages I speak",
+    then: "English, Malayalam, Malay, Hindi, Tamil, Arabic and more. Tick yours, so an accent can’t turn English into Malay.",
+    on: false,
+    show: { src: "img/speech.jpg", width: 1420, height: 640, alt: "Speech settings in Hams with English and Malayalam ticked as the languages you speak.", focus: "50% 40%" },
   },
 ];
 
-/** How long each step of one dictation takes; widths follow the real durations. */
-export const STAGES = [
-  { id: "speak", grow: 6, time: "As long as you talk", clause: "First, hold the shortcut and speak. A small pill shows Hams is listening." },
-  { id: "hear", grow: 0.5, time: "Half a second", clause: "Then Whisper writes it down, on your Mac." },
-  { id: "tidy", grow: 1, time: "About a second", clause: "Next, the ums and “scratch that” go, and AI polish runs if it’s on." },
-  { id: "paste", grow: 0.1, time: "Instantly", clause: "Last, it’s pasted where your cursor was." },
+/** Everything Hams sends over the network, and when. */
+export const LEDGER = [
+  { what: "Your voice", where: "Never leaves this Mac", local: true },
+  { what: "Speech model", where: "Downloaded once, 466 MB", local: false },
+  { what: "Update check", where: "GitHub, every 6 hours", local: false },
+  { what: "Account", where: "There isn’t one", local: true },
 ];
+
+/** One dictation, step by step, with how long each step takes. */
+export const STEPS: { time: string; says: string; body: string; pill: PillState; window: "empty" | "heard" | "diff" | "written" }[] = [
+  { time: "As long as you talk", says: "Hold the shortcut and talk", body: "A small pill at the bottom of the screen shows Hams is listening. It never takes the focus from your app.", pill: { kind: "recording", time: "0:04" }, window: "empty" },
+  { time: "Half a second", says: "Whisper writes it down", body: "The speech model runs inside Hams, on your Mac’s own chip. Nothing is uploaded.", pill: { kind: "working", label: "Hearing" }, window: "heard" },
+  { time: "About a second", says: "The ums go", body: "Fillers and “scratch that” are taken out, and AI polish runs if you turned it on.", pill: { kind: "working", label: "Polishing" }, window: "diff" },
+  { time: "Instantly", says: "It lands at your cursor", body: "Hams pastes into the app you were in, then puts your clipboard back as it was.", pill: { kind: "done", label: "Pasted into Notes" }, window: "written" },
+];
+export const STEP_TEXT = {
+  raw: "so um the launch moves to friday uh scratch that the launch moves to thursday",
+  text: "The launch moves to Thursday.",
+};
 
 /** Keys are written as lists so each one is drawn as a key cap. */
 export const COMMANDS: { kind: string; keys?: string[]; prefix?: string; say?: string; does: string; group?: boolean }[] = [

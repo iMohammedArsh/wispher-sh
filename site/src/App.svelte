@@ -1,13 +1,14 @@
 <script lang="ts">
+  import Board from "./components/Board.svelte";
   import Faq from "./components/Faq.svelte";
-  import Features from "./components/Features.svelte";
   import Footer from "./components/Footer.svelte";
   import GetHams from "./components/GetHams.svelte";
   import Hero from "./components/Hero.svelte";
+  import HowItWorks from "./components/HowItWorks.svelte";
   import Keys from "./components/Keys.svelte";
   import Nav from "./components/Nav.svelte";
   import Privacy from "./components/Privacy.svelte";
-  import Stages from "./components/Stages.svelte";
+  import Switches from "./components/Switches.svelte";
   import TryIt from "./components/TryIt.svelte";
 </script>
 
@@ -15,9 +16,10 @@
 <main id="top">
   <Hero />
   <TryIt />
-  <Features />
+  <Board />
+  <Switches />
+  <HowItWorks />
   <Privacy />
-  <Stages />
   <Keys />
   <Faq />
   <GetHams />

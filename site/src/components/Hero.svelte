@@ -16,6 +16,7 @@
       const progress = travel > 0 ? Math.min(1, Math.max(0, -hero.getBoundingClientRect().top / travel)) : 0;
       const steps = FRAMES.length - 1;
       index = 1 + Math.min(steps - 1, Math.floor(progress * steps));
+      hero.style.setProperty("--p", progress.toFixed(3));
     };
     const onScroll = () => {
       if (queued) return;
@@ -35,8 +36,8 @@
 <section class="hero" aria-labelledby="hero-title" bind:this={hero}>
   <div class="hero-stage">
     <h1 id="hero-title" class="hero-title">
-      <span class="half">You talk.</span>
-      <span class="half second">Hams types.</span>
+      <span class="half line"><span>You talk.</span></span>
+      <span class="half second line"><span>Hams types.</span></span>
     </h1>
     <div class="reel-window">
       <div class="reel" style:--i={index}>

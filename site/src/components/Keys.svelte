@@ -1,13 +1,13 @@
 <script lang="ts">
   import { COMMANDS } from "../lib/content";
-  import { reveal } from "../lib/reveal";
+  import { lines, stagger } from "../lib/motion";
   import Pill from "./Pill.svelte";
 </script>
 
 <section class="keys" aria-labelledby="keys-title">
-  <h2 id="keys-title" class="head keys-title" use:reveal>Everything you can press or say</h2>
+  <h2 id="keys-title" class="head keys-title" use:lines><span class="line"><span>Everything you can press or say</span></span></h2>
   <div class="keys-body">
-    <figure class="pills" data-ui use:reveal aria-label="The Hams pill while recording, while writing, and when done">
+    <figure class="pills" data-ui use:stagger={{ gap: 140, from: 1 }} aria-label="The Hams pill while recording, while writing, and when done">
       <Pill state={{ kind: "recording", time: "0:12" }} />
       <Pill state={{ kind: "working", label: "Polishing" }} />
       <Pill state={{ kind: "done", label: "Pasted into Notes" }} />
@@ -15,12 +15,12 @@
     </figure>
     <table class="commands">
       <caption class="visually-hidden">Shortcuts and voice commands</caption>
-      <tbody>
+      <tbody use:stagger={{ gap: 55, from: 2 }}>
         {#each COMMANDS as command, i (i)}
           <tr class:group={command.group}>
             <th scope="row">{command.kind}</th>
             <td>
-              {#if command.prefix}{command.prefix}{" "}{/if}{#each command.keys ?? [] as key (key)}<kbd>{key}</kbd>{/each}{command.say ?? ""}
+              {#if command.prefix}{command.prefix}{" "}{/if}{#each command.keys ?? [] as key, k (key)}<kbd style:--k={i * 3 + k}>{key}</kbd>{/each}{command.say ?? ""}
             </td>
             <td>{command.does}</td>
           </tr>
