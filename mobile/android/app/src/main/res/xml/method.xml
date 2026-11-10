@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Hams voice keyboard. It switches back to the user's typing keyboard with
+     the globe key, so it supports switching to the next/previous input method. -->
+<input-method xmlns:android="http://schemas.android.com/apk/res/android"
+    android:settingsActivity="com.wusla.hams.ui.MainActivity"
+    android:supportsSwitchingToNextInputMethod="true">
+    <subtype
+        android:label="@string/subtype_label"
+        android:imeSubtypeMode="keyboard"
+        android:imeSubtypeLocale=""
+        android:isAsciiCapable="true"
+        android:overridesImplicitlyEnabledSubtype="true" />
+</input-method>

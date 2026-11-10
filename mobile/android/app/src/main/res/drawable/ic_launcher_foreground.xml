@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Hams glyph: five voice-wave bars that also read as the letter H. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <group android:translateX="11.333" android:translateY="11.333" android:scaleX="0.08333" android:scaleY="0.08333">
+        <path android:fillColor="#FFFFFF" android:pathData="M298.0,252 a46.0,46.0 0 0 1 46.0,46.0 v428.0 a46.0,46.0 0 0 1 -92,0 v-428.0 a46.0,46.0 0 0 1 46.0,-46.0 z M409.0,402 a38.0,38.0 0 0 1 38.0,38.0 v144.0 a38.0,38.0 0 0 1 -76,0 v-144.0 a38.0,38.0 0 0 1 38.0,-38.0 z M512.0,352 a38.0,38.0 0 0 1 38.0,38.0 v244.0 a38.0,38.0 0 0 1 -76,0 v-244.0 a38.0,38.0 0 0 1 38.0,-38.0 z M615.0,402 a38.0,38.0 0 0 1 38.0,38.0 v144.0 a38.0,38.0 0 0 1 -76,0 v-144.0 a38.0,38.0 0 0 1 38.0,-38.0 z M726.0,252 a46.0,46.0 0 0 1 46.0,46.0 v428.0 a46.0,46.0 0 0 1 -92,0 v-428.0 a46.0,46.0 0 0 1 46.0,-46.0 z"/>
+    </group>
+</vector>

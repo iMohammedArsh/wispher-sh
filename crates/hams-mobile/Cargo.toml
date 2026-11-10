@@ -1,0 +1,35 @@
+[package]
+name = "hams-mobile"
+version = "0.2.0"
+description = "UniFFI bridge between the Hams engine (hams-core) and the Android and iOS apps."
+authors = ["Mohammed Arsh"]
+edition = "2021"
+
+[lib]
+name = "hams_mobile"
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[[bin]]
+# `cargo run -p hams-mobile --bin uniffi-bindgen -- generate --library … --language kotlin`
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+default = ["local-stt"]
+local-stt = ["hams-core/local-stt"]
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+hams-core = { path = "../hams-core", default-features = false }
+uniffi = "0.32"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+parking_lot = "0.12"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "test-util"] }
