@@ -17,26 +17,59 @@
     <main class="policy">
       <p class="eyebrow">WUSLA · LEGAL</p>
       <h1>Privacy Policy</h1>
-      <p class="effective">Effective: 12 September 2026</p>
-      <p class="lede">This policy explains how Wusla (“we”, “us”) handles information when you use Hams, our Android voice typing keyboard. For the Mac app, see the <a href="/privacy/mac/">Hams for Mac privacy policy</a>.</p>
+      <p class="effective">Effective: 17 November 2026</p>
+      <p class="lede">This policy explains how Wusla (“we”, “us”) handles information when you use Hams, our Android voice typing keyboard and app. In short: your voice is turned into text on your phone, what Hams writes stays on your phone, and nothing is sent anywhere unless you turn on AI polish with your own provider. For the Mac app, see the <a href="/privacy/mac/">Hams for Mac privacy policy</a>.</p>
 
-      <section><h2>1. Information Hams accesses</h2><p><strong>Microphone audio.</strong> Hams requests microphone permission only to record speech after you choose to start dictation. It does not continuously record in the background.</p><p><strong>Text in the active field.</strong> As an Android input method, Hams can receive the text context needed to insert dictated words, perform requested editing actions, and protect the active cursor position. Hams does not use this information for advertising or build a profile of you.</p><p><strong>Local settings and totals.</strong> Hams stores your selected writing mode and aggregate usage totals, such as word counts and recording time, on your device. These totals do not include the text you dictated.</p></section>
+      <section><h2>1. Information Hams accesses</h2>
+        <p><strong>Microphone audio.</strong> Hams uses the microphone only while you hold the record button (or after you lock it for hands-free dictation) and closes it as soon as you stop or cancel. It never listens in the background. Audio is kept in memory only while it is transcribed and is never saved to a file or sent off your phone.</p>
+        <p><strong>Text in the active field.</strong> As an Android keyboard, Hams reads a few characters before the cursor to space and capitalise the words it inserts, and your selected text when you use a voice command to edit it. Hams refuses to dictate into password fields. If you turn on the optional “Learn from fixes in the app” setting (off by default), Hams re-reads the field it just typed into for about a minute to notice words you corrected; that field text is not stored.</p>
+        <p><strong>The app you are typing in.</strong> Hams notes the app’s package name with each dictation, so it can pick a writing style for that app and show it in your history.</p>
+      </section>
 
-      <section><h2>2. How we use information</h2><p>We use microphone audio to transcribe your speech, insert the resulting text into the field you selected, and provide the correction actions you request. We use local settings to remember your chosen experience and local aggregate totals to show your activity inside the app.</p></section>
+      <section><h2>2. What Hams stores on your phone</h2>
+        <p>Hams keeps the following in its private app storage on your device:</p>
+        <ul>
+          <li><strong>Dictation history:</strong> what you said (the raw transcript), what Hams wrote, the app, the time and the length. It powers search, copy, rewrite and your word counts.</li>
+          <li><strong>Your words:</strong> dictionary entries, snippets, and suggested corrections Hams learned from your edits (you approve each one).</li>
+          <li><strong>Settings</strong>, including your chosen speech model, languages and styles.</li>
+          <li><strong>API keys</strong> you enter for AI polish, encrypted with a key held in the Android Keystore.</li>
+          <li><strong>The speech model</strong> you download.</li>
+        </ul>
+        <p>None of this is uploaded to us. Hams turns off Android backup for all of it, so it is not copied to Google Drive or to a new phone.</p>
+      </section>
 
-      <section><h2>3. On-device and cloud processing</h2><p>Hams is designed to work on-device where available, including for private destinations and offline fallback. Temporary audio used for active on-device transcription is stored in the app cache and deleted after completion, cancellation, or cleanup.</p><p>If Hams offers cloud transcription or rewriting and you use that mode, the audio or text needed for that request is sent over an encrypted connection to Hams’ configured processing service and may be processed by Google Gemini. This is used only to provide the requested transcription or rewrite. Do not use cloud mode for information you do not want processed by those providers.</p></section>
+      <section><h2>3. On-device speech recognition</h2>
+        <p>Hams transcribes your speech on your phone with an open-source Whisper model. The first time, you download the model (about 60–190 MB) from Hugging Face. That download sends no information about you beyond a normal web request; after it, dictation works offline.</p>
+      </section>
 
-      <section><h2>4. Retention and deletion</h2><p>Hams does not create user accounts and does not operate an advertising profile. Temporary recordings are normally deleted when processing finishes, when you cancel, or when the app cleans its cache. If a transcription cannot be completed, Hams may temporarily keep that recording on your device so you can choose to retry it; it is deleted when you retry, start a new recording, or the app is closed and cleans temporary files.</p><p>You can clear Hams’ local settings and cached files through Android’s app settings by choosing <em>Clear storage</em> or <em>Clear cache</em>, as applicable.</p></section>
+      <section><h2>4. Optional AI polish</h2>
+        <p>AI polish is off unless you turn it on. If you do, you choose a provider and enter your own API key or server address: Google Gemini, Anthropic, OpenAI, Groq, OpenRouter, Ollama, or another OpenAI-compatible service. For each dictation it polishes, Hams sends <strong>text only, never audio</strong>, directly from your phone to that provider: the transcript, the style instructions, and the words in your dictionary so they are spelled correctly. For voice editing commands it also sends the text you selected.</p>
+        <p>We do not run a server in between and do not receive this text. The provider you choose handles it under its own privacy policy and terms. Hams uses HTTPS for the built-in providers; for Ollama or a custom service, the connection is the address you enter. Don’t turn on AI polish for information you do not want processed by that provider.</p>
+      </section>
 
-      <section><h2>5. Sharing</h2><p>We do not sell your information. We share audio or text only with service providers necessary to deliver a cloud feature you choose to use, as described above. Hams does not include third-party advertising SDKs.</p></section>
+      <section><h2>5. Retention and deletion</h2>
+        <p>Hams has no accounts and we hold no copy of your data. Your history stays on your phone until you delete it: delete single dictations, clear history (pinned items are kept), or remove everything in Android settings → Apps → Hams → Storage → <em>Clear storage</em>. Uninstalling Hams deletes all of it, including your API keys.</p>
+      </section>
 
-      <section><h2>6. Security</h2><p>Hams uses Android’s app sandbox for local data and HTTPS for cloud requests. No transmission or storage method is completely secure, but we use reasonable technical measures appropriate to the feature.</p></section>
+      <section><h2>6. Sharing</h2>
+        <p>We do not sell or share your information. Text leaves your phone only when you turn on AI polish, and then only to the provider you chose. Hams contains no advertising, analytics or crash-reporting SDKs.</p>
+      </section>
 
-      <section><h2>7. Children</h2><p>Hams is not directed to children under the age where parental consent is required in their jurisdiction. If you believe a child has provided personal information through Hams, contact us so we can review the issue.</p></section>
+      <section><h2>7. Security</h2>
+        <p>Your data is protected by Android’s app sandbox, API keys are encrypted with the Android Keystore, and requests to the built-in AI providers use HTTPS. No method of storage or transmission is completely secure, but we use reasonable measures appropriate to each feature.</p>
+      </section>
 
-      <section><h2>8. Changes to this policy</h2><p>We may update this policy as Hams evolves. We will publish the new version on this page and update the effective date.</p></section>
+      <section><h2>8. Children</h2>
+        <p>Hams is not directed to children under the age where parental consent is required in their jurisdiction. If you believe a child has provided personal information through Hams, contact us so we can review the issue.</p>
+      </section>
 
-      <section><h2>9. Contact</h2><p>For privacy questions or requests, email <a href="mailto:wuslateam@gmail.com">wuslateam@gmail.com</a>.</p></section>
+      <section><h2>9. Changes to this policy</h2>
+        <p>We may update this policy as Hams evolves. We will publish the new version on this page and update the effective date.</p>
+      </section>
+
+      <section><h2>10. Contact</h2>
+        <p>For privacy questions or requests, email <a href="mailto:wuslateam@gmail.com">wuslateam@gmail.com</a>.</p>
+      </section>
     </main>
     <footer><span>© 2026 Wusla</span><a href="/">Hams</a><a href="mailto:wuslateam@gmail.com">Contact</a></footer></body>
 </html>
