@@ -13,6 +13,7 @@
     "tauri:build": "npm run tauri build",
     "site:dev": "vite --config site/vite.config.ts",
     "site:build": "vite build --config site/vite.config.ts && vite build --config site/vite.config.ts --ssr src/entry-server.ts --outDir dist-ssr && node site/prerender.mjs",
+    "site:deploy": "npm run site:build && npx -y wrangler@4 pages deploy site/dist --project-name=hams --branch=main --commit-dirty=true",
     "site:preview": "vite preview --config site/vite.config.ts --port 1432"
   },
   "dependencies": {
