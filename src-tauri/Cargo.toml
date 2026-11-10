@@ -12,37 +12,32 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [features]
 default = ["local-stt"]
 # In-process whisper.cpp. Disable to type-check without a C++ toolchain.
-local-stt = ["dep:whisper-rs"]
+local-stt = ["hams-core/local-stt"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+hams-core = { path = "../crates/hams-core", default-features = false }
 tauri = { version = "2", features = ["tray-icon", "macos-private-api", "image-png"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 futures-util = "0.3"
 parking_lot = "0.12"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"
-rusqlite = { version = "0.32", features = ["bundled"] }
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 dirs = "5"
 cpal = "0.15"
-rubato = "0.16"
 arboard = "3"
-regex = "1"
-whisper-rs = { version = "0.15", optional = true }
 tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-whisper-rs = { version = "0.15", optional = true, features = ["metal"] }
 core-foundation = "0.10"
 # Keychain existence checks that read attributes only, so macOS never prompts.
 security-framework = "3"
@@ -61,26 +56,9 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [dev-dependencies]
+hams-core = { path = "../crates/hams-core", default-features = false, features = ["specta"] }
 specta = { version = "=2.0.0-rc.28", features = ["derive"] }
 specta-serde = "=0.0.15"
 specta-typescript = "=0.0.15"
 specta-util = "=0.0.15"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "test-util"] }
-
-[profile.release]
-lto = "thin"
-codegen-units = 1
-strip = true
-
-# whisper.cpp is unusably slow unoptimized; optimize it (and the DSP) even in dev builds.
-[profile.dev.package.whisper-rs-sys]
-opt-level = 3
-
-[profile.dev.package.rubato]
-opt-level = 3
-
-[profile.dev.package.realfft]
-opt-level = 3
-
-[profile.dev.package.rustfft]
-opt-level = 3

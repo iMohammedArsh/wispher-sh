@@ -2,11 +2,10 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::audio::AudioRecorder;
 use crate::controller::Controller;
 use crate::input::{Binding, Matcher, Shortcut};
 use crate::llm::{LlmClient, Polisher};
-use crate::settings::{AiProvider, SecretCache, Settings, SettingsStore};
+use crate::settings::{SecretCache, Settings, SettingsStore};
 use crate::store::Store;
 use crate::stt::Transcriber;
 use crate::ui::TauriUi;
@@ -14,7 +13,6 @@ use crate::ui::TauriUi;
 /// Everything the IPC commands need, managed by Tauri.
 pub struct AppState {
     pub controller: Controller,
-    pub recorder: Arc<AudioRecorder>,
     pub store: Arc<Store>,
     pub settings: Arc<SettingsStore>,
     pub ui: Arc<TauriUi>,
@@ -29,11 +27,6 @@ impl AppState {
         self.matcher.lock().set_bindings(bindings(settings));
     }
 
-    /// Open or close the always-on microphone to match the settings.
-    pub fn apply_microphone(&self, settings: &Settings) {
-        self.recorder.set_warm(settings.microphone.as_deref(), settings.keep_mic_warm);
-    }
-
     pub fn warm_up(&self, model: &str) {
         let (stt, model) = (Arc::clone(&self.stt), model.to_string());
         std::thread::spawn(move || stt.warm_up(&model));
@@ -41,10 +34,6 @@ impl AppState {
 
     pub fn polisher_for(&self, settings: &Settings) -> Arc<dyn Polisher> {
         make_polisher(&self.secrets, settings)
-    }
-
-    pub fn forget_secret(&self, provider: AiProvider) {
-        self.secrets.forget(provider);
     }
 }
 

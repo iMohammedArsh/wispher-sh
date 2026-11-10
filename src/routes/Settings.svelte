@@ -327,12 +327,6 @@
           </section>
         {/if}
         <div class="panel">
-          {@render toggle(
-            "Keep the microphone ready",
-            `Recording starts instantly and includes the moment before you pressed the shortcut. The mic stays on while Hams runs${mac ? " (macOS shows its mic dot)" : ""}; only the last second is held, in memory.`,
-            s.keep_mic_warm,
-            (v) => app.save({ keep_mic_warm: v }),
-          )}
           {@render toggle("Live preview", "Shows your words in the overlay while you speak. Uses more battery.", s.live_preview, (v) => app.save({ live_preview: v }))}
         </div>
 

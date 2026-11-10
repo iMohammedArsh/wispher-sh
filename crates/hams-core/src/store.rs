@@ -92,7 +92,7 @@ pub fn word_count(text: &str) -> i64 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[cfg_attr(test, derive(specta::Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct HistoryItem {
     pub id: i64,
     pub created_at: i64,
@@ -119,7 +119,7 @@ pub struct NewHistory<'a> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[cfg_attr(test, derive(specta::Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct DictionaryEntry {
     pub id: i64,
     pub term: String,
@@ -129,7 +129,7 @@ pub struct DictionaryEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[cfg_attr(test, derive(specta::Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Snippet {
     pub id: i64,
     pub trigger: String,
@@ -137,7 +137,7 @@ pub struct Snippet {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[cfg_attr(test, derive(specta::Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Suggestion {
     pub id: i64,
     pub heard: String,
@@ -146,7 +146,7 @@ pub struct Suggestion {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[cfg_attr(test, derive(specta::Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Stats {
     pub total_words: i64,
     pub total_dictations: i64,
@@ -161,7 +161,7 @@ pub struct Stats {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[cfg_attr(test, derive(specta::Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Note {
     pub id: i64,
     pub created_at: i64,

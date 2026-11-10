@@ -19,7 +19,7 @@ use crate::error::{AppError, AppResult};
 use crate::input::{Binding, HotkeyAction};
 use crate::llm::styles::{self, Style};
 use crate::llm::{self, Polisher, Task};
-use crate::platform::{AppTarget, Delivered, Desktop};
+use crate::desktop::{AppTarget, Delivered, Desktop};
 use crate::settings::{DeliveryMode, Settings, SettingsStore};
 use crate::store::{self, NewHistory, Store};
 use crate::stt::{SttRequest, Transcriber};
@@ -31,7 +31,7 @@ const TAP: Duration = Duration::from_millis(220);
 const DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(350);
 /// Live preview: how often the recent audio is re-transcribed, and how much of it.
 const PREVIEW_EVERY: Duration = Duration::from_millis(1_000);
-const PREVIEW_WINDOW_SECONDS: u32 = 20;
+pub const PREVIEW_WINDOW_SECONDS: u32 = 20;
 /// Notes mode: transcribe the recording in chunks of about this length while it runs.
 const NOTE_CHUNK_SECONDS: u32 = 30;
 const NOTE_POLL: Duration = Duration::from_millis(1_000);
@@ -57,27 +57,6 @@ pub trait Recorder: Send + Sync {
     /// Notes mode: take the buffered audio once at least `min_seconds` are in, and keep recording.
     fn drain(&self, _min_seconds: u32) -> Option<Captured> {
         None
-    }
-}
-
-impl Recorder for crate::audio::AudioRecorder {
-    fn start(&self, device: Option<&str>) -> AppResult<()> {
-        crate::audio::AudioRecorder::start(self, device)
-    }
-    fn stop(&self) -> AppResult<Captured> {
-        crate::audio::AudioRecorder::stop(self)
-    }
-    fn cancel(&self) {
-        crate::audio::AudioRecorder::cancel(self)
-    }
-    fn level(&self) -> f32 {
-        crate::audio::AudioRecorder::level(self)
-    }
-    fn snapshot(&self) -> Option<Captured> {
-        Some(crate::audio::AudioRecorder::snapshot(self, PREVIEW_WINDOW_SECONDS))
-    }
-    fn drain(&self, min_seconds: u32) -> Option<Captured> {
-        crate::audio::AudioRecorder::drain(self, min_seconds)
     }
 }
 
@@ -114,7 +93,7 @@ pub struct Deps {
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
-#[cfg_attr(test, derive(specta::Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub enum Phase {
     #[default]
     Idle,
@@ -128,7 +107,7 @@ pub enum Phase {
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
-#[cfg_attr(test, derive(specta::Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub enum Kind {
     #[default]
     Dictate,
@@ -138,7 +117,7 @@ pub enum Kind {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Default)]
-#[cfg_attr(test, derive(specta::Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Status {
     pub phase: Phase,
     pub kind: Kind,

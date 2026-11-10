@@ -7,6 +7,9 @@ use regex::{Regex, RegexBuilder};
 
 use crate::store::{DictionaryEntry, Snippet};
 
+mod diff;
+pub use diff::{change_summary, diff_words, word_key, Run, RunKind, WordDiff};
+
 #[derive(Debug, Clone, Default)]
 pub struct Options {
     pub voice_commands: bool,

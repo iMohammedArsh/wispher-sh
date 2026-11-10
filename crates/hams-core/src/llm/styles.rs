@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
-#[cfg_attr(test, derive(specta::Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub enum Style {
     Default,
     Messaging,
@@ -28,7 +28,6 @@ impl Style {
         }
     }
 
-    #[cfg(test)]
     pub fn from_id(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|s| s.id() == id)
     }
@@ -79,7 +78,7 @@ impl Style {
 /// User edits to a built-in style. `None` keeps the built-in value.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
-#[cfg_attr(test, derive(specta::Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct StyleOverride {
     pub prompt: Option<String>,
     pub polish: Option<bool>,
@@ -88,7 +87,7 @@ pub struct StyleOverride {
 /// "Always use this style in this app." Matched case-insensitively against the
 /// bundle id / exe name or the app's display name.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[cfg_attr(test, derive(specta::Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct AppRule {
     pub app: String,
     pub style: Style,

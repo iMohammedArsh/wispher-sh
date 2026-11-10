@@ -3,16 +3,17 @@
 
 use serde_json::Value;
 
-use crate::settings::{self, AiProvider, DeliveryMode, SettingsStore};
+use crate::settings::{AiProvider, DeliveryMode, SecretCache, SettingsStore};
 use crate::store::{NewHistory, Store};
 
 const DONE_KEY: &str = "import_v1_done";
 
-pub fn run(store: &Store, settings_store: &SettingsStore) {
+pub fn run(store: &Store, settings_store: &SettingsStore, secrets: &SecretCache) {
     if matches!(store.get_json::<bool>(DONE_KEY), Ok(Some(true))) {
         return;
     }
-    let dir = crate::paths::v1_dir();
+    // Hams v1 was named "wisper" at the time. Read-only: never deleted.
+    let dir = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join("wisper");
     if dir.is_dir() {
         let mut summary = Vec::new();
         let read = |name: &str| -> Option<Value> {
@@ -23,7 +24,7 @@ pub fn run(store: &Store, settings_store: &SettingsStore) {
         if let Some(old) = read("settings.json") {
             let mut settings = settings_store.get();
             if let Some(key) = old.get("gemini_api_key").and_then(Value::as_str).filter(|k| !k.trim().is_empty()) {
-                if settings::set_secret(AiProvider::Gemini.keychain_account(), key).is_ok() {
+                if secrets.set(AiProvider::Gemini, key).is_ok() {
                     settings.ai.provider = AiProvider::Gemini;
                     if let Some(model) = old.get("gemini_model").and_then(Value::as_str) {
                         settings.ai.model = model.to_string();

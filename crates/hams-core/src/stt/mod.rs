@@ -31,6 +31,9 @@ pub trait Transcriber: Send + Sync {
     }
     /// Load the model ahead of time so the first dictation is fast.
     fn warm_up(&self, _model: &str) {}
+    /// Free the loaded model (phones under memory pressure). The next
+    /// transcription loads it again.
+    fn release(&self) {}
 }
 
 /// How much of the allowed languages' combined probability a language other

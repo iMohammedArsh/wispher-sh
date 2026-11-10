@@ -51,7 +51,10 @@ impl WhisperEngine {
 }
 
 fn threads() -> usize {
-    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 8)
+    // Phones mix big and little cores; more than four threads lands work on the
+    // slow ones and makes inference slower, not faster.
+    let max = if cfg!(any(target_os = "android", target_os = "ios")) { 4 } else { 8 };
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, max)
 }
 
 /// Whisper's language scores for the first 30 s of `samples`, narrowed to the
@@ -159,6 +162,12 @@ impl Transcriber for WhisperEngine {
         match self.transcribe(&silence, &request) {
             Ok(_) => tracing::info!("Whisper warmed up"),
             Err(error) => tracing::info!("Whisper warm-up skipped: {error}"),
+        }
+    }
+
+    fn release(&self) {
+        if self.loaded.lock().take().is_some() {
+            tracing::info!("Released the Whisper model");
         }
     }
 }

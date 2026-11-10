@@ -19,7 +19,6 @@ const settings: Settings = {
   paste_last_shortcut: "Meta+Alt+Shift+V",
   double_tap_lock: true,
   microphone: null,
-  keep_mic_warm: false,
   language: "auto",
   languages: ["en", "ml"],
   model: "small",
@@ -149,9 +148,9 @@ let snippets: Snippet[] = [
 ];
 
 const models: ModelStatus[] = [
-  { id: "base", file: "ggml-base.bin", label: "Base", size_mb: 148, multilingual: true, note: "Fastest. Good for clear English.", installed: false },
-  { id: "small", file: "ggml-small.bin", label: "Small", size_mb: 488, multilingual: true, note: "Recommended balance. Handles Malayalam and mixed speech.", installed: true },
-  { id: "large-v3-turbo-q5", file: "ggml-large-v3-turbo-q5_0.bin", label: "Large v3 Turbo", size_mb: 574, multilingual: true, note: "Most accurate. Needs Apple Silicon or a fast CPU.", installed: false },
+  { id: "base", file: "ggml-base.bin", label: "Base", size_mb: 148, multilingual: true, note: "Fastest. Good for clear English.", mobile: false, installed: false },
+  { id: "small", file: "ggml-small.bin", label: "Small", size_mb: 488, multilingual: true, note: "Recommended balance. Handles Malayalam and mixed speech.", mobile: false, installed: true },
+  { id: "large-v3-turbo-q5", file: "ggml-large-v3-turbo-q5_0.bin", label: "Large v3 Turbo", size_mb: 574, multilingual: true, note: "Most accurate. Needs Apple Silicon or a fast CPU.", mobile: false, installed: false },
 ];
 
 const styles: StyleInfo[] = [

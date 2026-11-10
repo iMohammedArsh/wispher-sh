@@ -4,22 +4,18 @@ mod audio;
 #[cfg(test)]
 mod bindings;
 mod commands;
-mod controller;
-mod error;
 mod import_v1;
-mod input;
-mod llm;
 mod logging;
 mod overlay;
-mod paths;
 mod platform;
-mod settings;
+mod secrets;
 mod state;
-mod store;
-mod stt;
-mod text;
 mod ui;
 mod updater;
+
+// The engine lives in hams-core (shared with the mobile apps); re-exported so
+// desktop code keeps using `crate::controller`, `crate::settings` and so on.
+pub(crate) use hams_core::{controller, error, input, llm, paths, settings, store, stt, text};
 
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, OnceLock};
@@ -83,18 +79,17 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let handle = app.handle().clone();
     let store = open_store();
     let settings = Arc::new(SettingsStore::load(Arc::clone(&store)));
-    import_v1::run(&store, &settings);
+    let secrets = Arc::new(SecretCache::new(Arc::new(secrets::KeychainSecrets)));
+    import_v1::run(&store, &settings, &secrets);
     let current = settings.get();
 
     overlay::create(&handle);
     let ui = Arc::new(ui::TauriUi::new(handle.clone()));
     let stt = transcriber();
-    let secrets = Arc::new(SecretCache::default());
     let recording = Arc::new(AtomicBool::new(false));
 
-    let recorder = Arc::new(audio::AudioRecorder::new());
     let deps = Deps {
-        recorder: recorder.clone(),
+        recorder: Arc::new(audio::AudioRecorder::new()),
         stt: Arc::clone(&stt),
         desktop: Arc::new(platform::NativeDesktop),
         polisher: {
@@ -130,7 +125,6 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     let state = AppState {
         controller,
-        recorder,
         store,
         settings,
         ui,
@@ -140,7 +134,6 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         secrets,
     };
     state.warm_up(&current.model);
-    state.apply_microphone(&current);
     app.manage(state);
     app.manage(updater::Updates::default());
     updater::spawn_checks(handle.clone());

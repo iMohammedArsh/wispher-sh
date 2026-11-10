@@ -1,5 +1,5 @@
 //! Typed settings stored as one JSON value in SQLite. API keys never live here:
-//! they go to the OS keychain (macOS Keychain / Windows Credential Manager).
+//! they go to a [`SecretStore`] (the OS keychain on desktop, Keystore/Keychain on phones).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -13,13 +13,10 @@ use crate::llm::styles::{AppRule, Style, StyleOverride, MAX_PROMPT_CHARS};
 use crate::store::Store;
 
 const SETTINGS_KEY: &str = "settings";
-const KEYCHAIN_SERVICE: &str = "com.wusla.hams";
-/// Earlier v2 builds used this service name; keys found there are moved over.
-const LEGACY_KEYCHAIN_SERVICE: &str = "com.mohammedarsh.hams";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
-#[cfg_attr(test, derive(specta::Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub enum DeliveryMode {
     /// Paste, then put the user's previous clipboard back.
     #[default]
@@ -32,7 +29,7 @@ pub enum DeliveryMode {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
-#[cfg_attr(test, derive(specta::Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub enum AiProvider {
     #[default]
     Off,
@@ -68,7 +65,7 @@ impl AiProvider {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
-#[cfg_attr(test, derive(specta::Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct AiSettings {
     pub provider: AiProvider,
     /// Empty means the provider's recommended fast model.
@@ -94,7 +91,7 @@ impl Default for AiSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
-#[cfg_attr(test, derive(specta::Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Settings {
     pub dictate_shortcut: String,
     pub command_shortcut: String,
@@ -104,9 +101,6 @@ pub struct Settings {
     pub double_tap_lock: bool,
     /// None = system default input.
     pub microphone: Option<String>,
-    /// Keep the microphone open between dictations: instant start, and the
-    /// moment just before the key press is included.
-    pub keep_mic_warm: bool,
     /// "auto", or a Whisper language code such as "en" or "ml".
     pub language: String,
     /// With "auto": the languages detection may choose from, main language
@@ -142,7 +136,6 @@ impl Default for Settings {
             paste_last_shortcut: if mac { "Meta+Alt+Shift+V" } else { "Ctrl+Alt+Shift+V" }.into(),
             double_tap_lock: true,
             microphone: None,
-            keep_mic_warm: false,
             language: "auto".into(),
             languages: Vec::new(),
             model: "small".into(),
@@ -233,63 +226,29 @@ impl SettingsStore {
 
 // ---- secrets ---------------------------------------------------------------
 
-pub fn set_secret(account: &str, value: &str) -> AppResult<()> {
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| AppError::Settings(e.to_string()))?;
-    if value.trim().is_empty() {
-        match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(AppError::Settings(e.to_string())),
-        }
-    } else {
-        entry.set_password(value.trim()).map_err(|e| AppError::Settings(e.to_string()))
+/// Where API keys live: the OS keychain on desktop, the Android Keystore or the
+/// iOS Keychain on phones. Accounts are [`AiProvider::keychain_account`] names.
+pub trait SecretStore: Send + Sync {
+    fn get(&self, account: &str) -> Option<String>;
+    /// An empty `value` deletes the key.
+    fn set(&self, account: &str, value: &str) -> AppResult<()>;
+    /// Whether a key is stored. Implementations should avoid reading the secret
+    /// itself when the platform can answer from attributes alone.
+    fn has(&self, account: &str) -> bool {
+        self.get(account).is_some()
     }
 }
 
-fn read_secret(service: &str, account: &str) -> Option<String> {
-    keyring::Entry::new(service, account)
-        .ok()?
-        .get_password()
-        .ok()
-        .filter(|s| !s.is_empty())
-}
+/// Keeps nothing. For tests and builds with no secure storage.
+pub struct NoSecrets;
 
-/// Whether a key is stored, without reading it. On macOS this asks the keychain
-/// for the item's attributes only: reading the secret itself makes macOS ask for
-/// the login password whenever the app's signature differs from the one that
-/// saved it, and this is called every time the settings load.
-pub fn has_secret(account: &str) -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        use security_framework::item::{ItemClass, ItemSearchOptions};
-        [KEYCHAIN_SERVICE, LEGACY_KEYCHAIN_SERVICE].iter().any(|service| {
-            ItemSearchOptions::new()
-                .class(ItemClass::generic_password())
-                .service(service)
-                .account(account)
-                .load_attributes(true)
-                .limit(1)
-                .search()
-                .is_ok_and(|found| !found.is_empty())
-        })
+impl SecretStore for NoSecrets {
+    fn get(&self, _account: &str) -> Option<String> {
+        None
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        get_secret(account).is_some()
+    fn set(&self, _account: &str, _value: &str) -> AppResult<()> {
+        Err(AppError::Settings("this build can't store API keys".into()))
     }
-}
-
-pub fn get_secret(account: &str) -> Option<String> {
-    if let Some(secret) = read_secret(KEYCHAIN_SERVICE, account) {
-        return Some(secret);
-    }
-    let legacy = read_secret(LEGACY_KEYCHAIN_SERVICE, account)?;
-    if set_secret(account, &legacy).is_ok() {
-        if let Ok(entry) = keyring::Entry::new(LEGACY_KEYCHAIN_SERVICE, account) {
-            let _ = entry.delete_credential();
-        }
-        tracing::info!("Moved the {account} API key to the {KEYCHAIN_SERVICE} keychain entry");
-    }
-    Some(legacy)
 }
 
 #[cfg(test)]
@@ -306,11 +265,6 @@ mod tests {
         let settings: Settings = serde_json::from_str(r#"{"language":"ml","future_field":1}"#).unwrap();
         assert_eq!(settings.language, "ml");
         assert_eq!(settings.model, "small");
-    }
-
-    #[test]
-    fn has_secret_is_false_for_a_missing_key() {
-        assert!(!has_secret("hams-test-account-that-does-not-exist"));
     }
 
     #[test]
@@ -333,15 +287,31 @@ mod tests {
 
 /// Keychain reads can be slow (and on macOS may prompt after a rebuild), so keys
 /// are read once and cached in memory.
-#[derive(Default)]
 pub struct SecretCache {
+    store: Arc<dyn SecretStore>,
     cache: parking_lot::Mutex<std::collections::HashMap<&'static str, Option<String>>>,
 }
 
 impl SecretCache {
+    pub fn new(store: Arc<dyn SecretStore>) -> Self {
+        Self { store, cache: Default::default() }
+    }
+
     pub fn get(&self, provider: AiProvider) -> Option<String> {
         let account = provider.keychain_account();
-        self.cache.lock().entry(account).or_insert_with(|| get_secret(account)).clone()
+        self.cache.lock().entry(account).or_insert_with(|| self.store.get(account)).clone()
+    }
+
+    /// Whether a key is stored, without reading (or caching) it.
+    pub fn has(&self, provider: AiProvider) -> bool {
+        self.store.has(provider.keychain_account())
+    }
+
+    /// Store (or, with an empty value, delete) the key and drop the cached copy.
+    pub fn set(&self, provider: AiProvider, value: &str) -> AppResult<()> {
+        self.store.set(provider.keychain_account(), value)?;
+        self.forget(provider);
+        Ok(())
     }
 
     pub fn forget(&self, provider: AiProvider) {

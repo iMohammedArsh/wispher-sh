@@ -93,6 +93,8 @@ export type ModelInfo = {
 	size_mb: number,
 	multilingual: boolean,
 	note: string,
+	/**  Small, quantized models meant for phones. Desktop lists only the others. */
+	mobile: boolean,
 };
 
 export type ModelProgress = {
@@ -158,11 +160,6 @@ export type Settings_Deserialize = {
 	double_tap_lock?: boolean,
 	/**  None = system default input. */
 	microphone?: string | null,
-	/**
-	 *  Keep the microphone open between dictations: instant start, and the
-	 *  moment just before the key press is included.
-	 */
-	keep_mic_warm?: boolean,
 	/**  "auto", or a Whisper language code such as "en" or "ml". */
 	language?: string,
 	/**
@@ -200,11 +197,6 @@ export type Settings_Serialize = {
 	double_tap_lock: boolean,
 	/**  None = system default input. */
 	microphone: string | null,
-	/**
-	 *  Keep the microphone open between dictations: instant start, and the
-	 *  moment just before the key press is included.
-	 */
-	keep_mic_warm: boolean,
 	/**  "auto", or a Whisper language code such as "en" or "ml". */
 	language: string,
 	/**

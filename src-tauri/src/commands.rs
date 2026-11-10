@@ -10,7 +10,7 @@ use crate::controller::{Input, Status};
 use crate::error::{AppError, AppResult};
 use crate::llm::styles::Style;
 use crate::llm::{self, LlmClient, Polisher, Task};
-use crate::settings::{self, AiProvider, Settings};
+use crate::settings::{AiProvider, Settings};
 use crate::state::AppState;
 use crate::store::{DictionaryEntry, HistoryItem, Note, Snippet, Stats, Suggestion};
 use crate::stt::models::{self, ModelStatus};
@@ -36,7 +36,7 @@ pub enum Platform {
 #[tauri::command]
 pub fn get_settings(state: State<AppState>) -> SettingsView {
     let settings = state.settings.get();
-    let has_api_key = settings::has_secret(settings.ai.provider.keychain_account());
+    let has_api_key = state.secrets.has(settings.ai.provider);
     SettingsView {
         settings,
         has_api_key,
@@ -49,12 +49,8 @@ pub fn get_settings(state: State<AppState>) -> SettingsView {
 pub fn save_settings(state: State<AppState>, settings: Settings) -> AppResult<()> {
     let previous = state.settings.get();
     let model_changed = previous.model != settings.model;
-    let mic_changed = previous.keep_mic_warm != settings.keep_mic_warm || previous.microphone != settings.microphone;
     state.settings.save(settings.clone())?;
     state.apply_shortcuts(&settings);
-    if mic_changed {
-        state.apply_microphone(&settings);
-    }
     if model_changed {
         state.warm_up(&settings.model);
     }
@@ -63,9 +59,7 @@ pub fn save_settings(state: State<AppState>, settings: Settings) -> AppResult<()
 
 #[tauri::command]
 pub fn set_api_key(state: State<AppState>, provider: AiProvider, key: String) -> AppResult<()> {
-    settings::set_secret(provider.keychain_account(), &key)?;
-    state.forget_secret(provider);
-    Ok(())
+    state.secrets.set(provider, &key)
 }
 
 #[tauri::command]
@@ -120,7 +114,7 @@ pub fn list_microphones() -> Vec<String> {
 
 #[tauri::command]
 pub fn list_models() -> Vec<ModelStatus> {
-    models::statuses()
+    models::statuses(false)
 }
 
 #[derive(Clone, Serialize)]

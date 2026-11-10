@@ -1,17 +1,30 @@
+//! Desktop microphone capture (cpal). The audio types and DSP are in hams-core.
+
 mod capture;
-pub mod dsp;
 
 pub use capture::{list_microphones, AudioRecorder};
+pub use hams_core::audio::{dsp, Captured};
 
-/// Whisper's input rate.
-pub const TARGET_RATE: u32 = 16_000;
+use hams_core::controller::{Recorder, PREVIEW_WINDOW_SECONDS};
+use hams_core::error::AppResult;
 
-/// A finished recording, ready for speech-to-text.
-#[derive(Debug, Clone, Default)]
-pub struct Captured {
-    /// 16 kHz mono, cleaned up and trimmed to the speech.
-    pub samples: Vec<f32>,
-    /// Length of the raw recording.
-    pub duration_ms: u64,
-    pub has_speech: bool,
+impl Recorder for AudioRecorder {
+    fn start(&self, device: Option<&str>) -> AppResult<()> {
+        AudioRecorder::start(self, device)
+    }
+    fn stop(&self) -> AppResult<Captured> {
+        AudioRecorder::stop(self)
+    }
+    fn cancel(&self) {
+        AudioRecorder::cancel(self)
+    }
+    fn level(&self) -> f32 {
+        AudioRecorder::level(self)
+    }
+    fn snapshot(&self) -> Option<Captured> {
+        Some(AudioRecorder::snapshot(self, PREVIEW_WINDOW_SECONDS))
+    }
+    fn drain(&self, min_seconds: u32) -> Option<Captured> {
+        AudioRecorder::drain(self, min_seconds)
+    }
 }
