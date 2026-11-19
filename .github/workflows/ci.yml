@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [rewrite/v2, main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Frontend gate + the Rust workspace on macOS (the primary platform).
+  # --no-default-features skips the local-stt feature, so whisper.cpp's C++
+  # build is not needed and the job stays fast.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      # tauri::generate_context! needs the built frontend (dist/) to exist.
+      - run: npm run build
+      - run: cargo test --workspace --no-default-features
+
+  # The Windows module (src-tauri/src/platform/windows/) had never been
+  # compiled. This job is its first real build; keep it green.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+      - run: npm run build
+      - run: cargo check -p hams --no-default-features
+      - run: cargo test --workspace --no-default-features
+
+  # The phone engine and its UniFFI facade, host-side. The Android app itself
+  # (Gradle, NDK, cargo-ndk) is not built here: that needs the Android SDK and
+  # is run locally via scripts/build-mobile-core.sh.
+  mobile-engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p hams-core -p hams-mobile --no-default-features

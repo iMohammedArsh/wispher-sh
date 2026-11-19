@@ -27,7 +27,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.wusla.hams.core.AI_PROVIDERS
-import com.wusla.hams.core.LANGUAGES
 import com.wusla.hams.core.Parse
 import com.wusla.hams.core.io
 import com.wusla.hams.ui.AppModel
@@ -50,7 +49,6 @@ import com.wusla.hams.ui.components.Tone
 import com.wusla.hams.ui.theme.HamsType
 import com.wusla.hams.ui.theme.Tokens
 import kotlinx.coroutines.launch
-import org.json.JSONArray
 
 /** You and its settings areas, one at a time: pick an area, change it, go back. */
 @Composable
@@ -68,11 +66,16 @@ fun SettingsScreen(model: AppModel, area: String?, requestMic: ((Boolean) -> Uni
                 BackBar({ setArea(null) }, "You")
                 Spacer(Modifier.height(8.dp))
                 when (area) {
+                    "languages" -> LanguagesArea(model) { setArea("model") }
                     "model" -> ModelArea(model)
-                    "speech" -> SpeechArea(model)
+                    "speech" -> CleanUpArea(model)
                     "ai" -> AiArea(model)
                     "styles" -> StylesArea(model)
                     "privacy" -> PrivacyArea(model)
+                    "setup" -> {
+                        ScreenTitle("Setup check", "Everything Hams needs to type for you. Tap a row that isn't done to fix it.")
+                        SetupChecklist(model, requestMic, openArea = { setArea(it) })
+                    }
                 }
             }
         }
@@ -83,7 +86,7 @@ fun SettingsScreen(model: AppModel, area: String?, requestMic: ((Boolean) -> Uni
 private fun ModelArea(model: AppModel) {
     val c = Tokens.colors
     val s = model.settings ?: return
-    ScreenTitle("Speech model", "Whisper runs on this phone. Speech never leaves it for transcription.")
+    ScreenTitle("Speech packs", "Whisper runs on this phone, so your voice never leaves it. Bigger packs are more accurate, especially for languages other than English.")
     model.models.forEach { m ->
         val selected = m.id == s.model
         val progress = model.downloads[m.id]
@@ -99,7 +102,14 @@ private fun ModelArea(model: AppModel) {
                     m.installed -> Pill("Downloaded")
                 }
             }
-            Spacer(Modifier.height(4.dp))
+            if (m.recommended || !m.multilingual) {
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (m.recommended) Pill("Best for your languages", Tone.Positive)
+                    if (!m.multilingual) Pill("English only")
+                }
+            }
+            Spacer(Modifier.height(6.dp))
             Muted(m.note)
             Spacer(Modifier.height(10.dp))
             if (progress != null) {
@@ -107,6 +117,11 @@ private fun ModelArea(model: AppModel) {
                 Spacer(Modifier.height(4.dp))
                 Muted("Downloading… ${(progress * 100).toInt()}%")
             } else {
+                model.downloadFailures[m.id]?.let { why ->
+                    Text("The download stopped: $why", style = HamsType.small, color = c.negative)
+                    Muted("Download again and Hams carries on from where it stopped.")
+                    Spacer(Modifier.height(8.dp))
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (!m.installed) PrimaryButton("Download", { model.download(m.id) })
                     if (!selected) QuietButton("Use this", { model.save { edit { put("model", m.id) } } })
@@ -118,47 +133,9 @@ private fun ModelArea(model: AppModel) {
 }
 
 @Composable
-private fun SpeechArea(model: AppModel) {
-    val c = Tokens.colors
+private fun CleanUpArea(model: AppModel) {
     val s = model.settings ?: return
-    var menu by remember { mutableStateOf(false) }
-    ScreenTitle("Language and clean-up")
-    Panel {
-        Text("Language", style = HamsType.bodyStrong, color = c.text)
-        Spacer(Modifier.height(4.dp))
-        Muted("Whisper writes in the language it detects. If it sometimes picks the wrong one, choose yours here or limit detection below.")
-        Spacer(Modifier.height(8.dp))
-        Column {
-            QuietButton(LANGUAGES.firstOrNull { it.first == s.language }?.second ?: s.language, { menu = true })
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                LANGUAGES.forEach { (code, name) ->
-                    DropdownMenuItem(text = { Text(name) }, onClick = {
-                        menu = false
-                        model.save { edit { put("language", code) } }
-                    })
-                }
-            }
-        }
-        if (s.language == "auto") {
-            Spacer(Modifier.height(16.dp))
-            Text("Languages you speak", style = HamsType.bodyStrong, color = c.text)
-            Muted("Detection picks only from these. The first is used when it's unsure.")
-            Spacer(Modifier.height(8.dp))
-            val chosen = s.languages
-            androidx.compose.foundation.layout.FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                LANGUAGES.drop(1).forEach { (code, name) ->
-                    val on = code in chosen
-                    Chip(if (on && chosen.firstOrNull() == code) "$name · main" else name, {
-                        val next = if (on) chosen - code else chosen + code
-                        model.save { edit { put("languages", JSONArray(next)) } }
-                    }, selected = on)
-                }
-            }
-        }
-    }
-    Spacer(Modifier.height(12.dp))
+    ScreenTitle("Clean-up", "What Hams tidies on this phone before anything else.")
     Panel {
         SwitchRow("Remove filler words", "um, uh, you know, repeated words", s.removeFillers, { v -> model.save { edit { put("remove_fillers", v) } } })
         Rule()

@@ -26,7 +26,7 @@ use hams_core::llm::styles::Style;
 use hams_core::llm::{self, LlmClient, Polisher, Task};
 use hams_core::settings::{AiProvider, DeliveryMode, SecretCache, SecretStore, Settings, SettingsStore};
 use hams_core::store::Store;
-use hams_core::stt::{models, Transcriber};
+use hams_core::stt::{languages, models, Transcriber};
 use hams_core::text;
 
 mod field;
@@ -232,7 +232,10 @@ impl MicControl for HostMic {
         if self.0.mic_start() {
             Ok(())
         } else {
-            Err(AppError::Permission("Hams can't use the microphone. Open the Hams app to allow it.".into()))
+            // The host can't say why: no permission, or another app (a call, a recorder) has the mic.
+            Err(AppError::Permission(
+                "Hams couldn't open the microphone. Allow it in the Hams app, and close any app that's recording.".into(),
+            ))
         }
     }
     fn stop(&self) {
@@ -582,14 +585,60 @@ impl HamsEngine {
     /// Blocking (disk). Validate and save the settings object.
     pub fn save_settings_json(&self, settings: String) -> Result<()> {
         let incoming: Settings = serde_json::from_str(&settings)?;
-        let incoming = phone_defaults(incoming);
-        let model_changed = self.settings.get().model != incoming.model;
-        self.settings.save(incoming)?;
-        if model_changed {
-            self.warm_up();
+        self.apply_settings(incoming)
+    }
+
+    // ---- languages --------------------------------------------------------------------------
+
+    /// JSON array of every language Whisper can write: `{code, name, native}`.
+    pub fn languages_json(&self) -> Result<String> {
+        json(&languages::LANGUAGES)
+    }
+
+    /// Blocking (disk). Save the languages the user speaks, main first.
+    /// One language is fixed (no detection pass, so dictation is faster);
+    /// with several, detection picks among them unless one was already pinned
+    /// and is still on the list. With no model downloaded yet, the model that
+    /// suits these languages is chosen so setup downloads the right one.
+    pub fn set_languages(&self, codes: Vec<String>) -> Result<()> {
+        let mut chosen: Vec<String> = Vec::new();
+        for code in codes {
+            let code = code.trim().to_string();
+            if languages::find(&code).is_none() {
+                return Err(failed(format!("Unknown language \"{code}\"")));
+            }
+            if !chosen.contains(&code) {
+                chosen.push(code);
+            }
         }
-        self.host.on_data_changed();
-        Ok(())
+        let mut next = self.settings.get();
+        next.language = match chosen.as_slice() {
+            [] => "auto".into(),
+            [only] => only.clone(),
+            _ if next.languages.len() > 1 && chosen.contains(&next.language) => next.language.clone(),
+            _ => "auto".into(),
+        };
+        next.languages = chosen;
+        if !models::statuses(true).iter().any(|m| m.installed) {
+            next.model = languages::recommend(&next.languages).into();
+        }
+        self.apply_settings(next)
+    }
+
+    /// Blocking (disk). Dictate in one language, or "auto" to detect among
+    /// the user's languages. The keyboard's language chip uses this.
+    pub fn set_language(&self, code: String) -> Result<()> {
+        if code != "auto" && languages::find(&code).is_none() {
+            return Err(failed(format!("Unknown language \"{code}\"")));
+        }
+        let mut next = self.settings.get();
+        next.language = code;
+        self.apply_settings(next)
+    }
+
+    /// The phone model that suits the user's languages.
+    pub fn recommended_model(&self) -> String {
+        languages::recommend(&self.settings.get().languages).into()
     }
 
     /// Save (or with an empty key, remove) the API key for `provider` ("gemini", "anthropic", …).
@@ -762,9 +811,22 @@ impl HamsEngine {
 
     // ---- speech models ----------------------------------------------------------------------
 
-    /// JSON array of phone models: `{id, file, label, size_mb, multilingual, note, mobile, installed}`.
+    /// JSON array of phone models: `{id, file, label, size_mb, multilingual,
+    /// note, mobile, installed, recommended}`. `recommended` marks the one that
+    /// suits the user's languages.
     pub fn models_json(&self) -> Result<String> {
-        json(&models::statuses(true))
+        #[derive(Serialize)]
+        struct Listed {
+            #[serde(flatten)]
+            status: models::ModelStatus,
+            recommended: bool,
+        }
+        let recommended = self.recommended_model();
+        let list: Vec<Listed> = models::statuses(true)
+            .into_iter()
+            .map(|status| Listed { recommended: status.info.id == recommended, status })
+            .collect();
+        json(&list)
     }
 
     /// Blocking (network). Download a model; resumes an interrupted download.
@@ -794,6 +856,18 @@ impl HamsEngine {
 
 
 impl HamsEngine {
+    /// Save settings with the phone's fixed choices; reload the model if it changed.
+    fn apply_settings(&self, incoming: Settings) -> Result<()> {
+        let incoming = phone_defaults(incoming);
+        let model_changed = self.settings.get().model != incoming.model;
+        self.settings.save(incoming)?;
+        if model_changed {
+            self.warm_up();
+        }
+        self.host.on_data_changed();
+        Ok(())
+    }
+
     /// The engine with a given speech engine (tests use a fake one). The
     /// database lives directly in `data_dir`.
     fn build(

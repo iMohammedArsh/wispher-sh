@@ -333,6 +333,50 @@ fn only_phone_models_are_listed() {
 }
 
 #[test]
+fn one_language_is_fixed_and_several_are_detected() {
+    let host = FakeHost::new(FieldKind::Text);
+    let engine = engine(&host, "");
+    let settings = |engine: &HamsEngine| -> serde_json::Value {
+        serde_json::from_str::<serde_json::Value>(&engine.settings_json().unwrap()).unwrap()["settings"].clone()
+    };
+
+    engine.set_languages(vec!["ml".into()]).unwrap();
+    assert_eq!(settings(&engine)["language"], "ml");
+
+    engine.set_languages(vec!["en".into(), "ml".into(), "en".into()]).unwrap();
+    let s = settings(&engine);
+    assert_eq!(s["language"], "auto");
+    assert_eq!(s["languages"], serde_json::json!(["en", "ml"]));
+    if !models::statuses(true).iter().any(|m| m.installed) {
+        assert_eq!(s["model"], "small-q5_1");
+    }
+
+    // A language pinned from the keyboard survives reordering.
+    engine.set_language("ml".into()).unwrap();
+    engine.set_languages(vec!["ml".into(), "en".into()]).unwrap();
+    assert_eq!(settings(&engine)["language"], "ml");
+
+    assert!(engine.set_language("xx".into()).is_err());
+    assert!(engine.set_languages(vec!["klingon".into()]).is_err());
+    engine.set_language("auto".into()).unwrap();
+    assert_eq!(settings(&engine)["language"], "auto");
+}
+
+#[test]
+fn languages_and_the_recommended_model_are_listed() {
+    let host = FakeHost::new(FieldKind::Text);
+    let engine = engine(&host, "");
+    let langs: Vec<serde_json::Value> = serde_json::from_str(&engine.languages_json().unwrap()).unwrap();
+    assert!(langs.iter().any(|l| l["code"] == "ml" && l["native"] == "മലയാളം"));
+
+    engine.set_languages(vec!["en".into(), "hi".into()]).unwrap();
+    let list: Vec<serde_json::Value> = serde_json::from_str(&engine.models_json().unwrap()).unwrap();
+    let recommended: Vec<&serde_json::Value> = list.iter().filter(|m| m["recommended"] == true).collect();
+    assert_eq!(recommended.len(), 1);
+    assert_eq!(recommended[0]["id"], "small-q5_1");
+}
+
+#[test]
 fn word_diff_is_exported_as_json() {
     let diff: serde_json::Value = serde_json::from_str(&word_diff_json("um see you".into(), "See you.".into())).unwrap();
     assert_eq!(diff["dropped"], 1);

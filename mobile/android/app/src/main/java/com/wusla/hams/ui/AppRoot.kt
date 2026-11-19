@@ -1,8 +1,14 @@
 package com.wusla.hams.ui
 
+import android.Manifest
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
+import android.database.ContentObserver
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.view.inputmethod.InputMethodManager
 import androidx.activity.compose.BackHandler
@@ -39,6 +45,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -54,11 +61,16 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.core.app.ActivityCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import com.wusla.hams.core.Downloads
 import com.wusla.hams.core.Hams
 import com.wusla.hams.ui.components.Mark
 import com.wusla.hams.ui.components.Muted
 import com.wusla.hams.ui.components.Panel
+import com.wusla.hams.ui.components.PrimaryButton
+import com.wusla.hams.ui.components.QuietButton
 import com.wusla.hams.ui.components.ScreenTitle
 import com.wusla.hams.ui.screens.HomeScreen
 import com.wusla.hams.ui.screens.OnboardingScreen
@@ -80,16 +92,30 @@ fun AppRoot(section: String?, onSectionHandled: () -> Unit, requestMic: ((Boolea
     var tab by rememberSaveable { mutableStateOf(Tab.Home) }
     var settingsArea by rememberSaveable { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(dataVersion, ready) { if (ready) model.reload() }
+    // Also when a download ends: the screen may have been recreated while it ran.
+    LaunchedEffect(dataVersion, ready, Downloads.finished) { if (ready) model.reload() }
     LifecycleResumeEffect(ready) {
         model.refreshSetup()
         onPauseOrDispose { }
+    }
+    // Choosing the keyboard in Android's picker is a system dialog: this activity isn't paused, so the
+    // resume check above never sees it. Watch the settings themselves, so setup steps notice at once.
+    DisposableEffect(context) {
+        val resolver = context.contentResolver
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) = model.refreshSetup()
+        }
+        listOf(Settings.Secure.DEFAULT_INPUT_METHOD, Settings.Secure.ENABLED_INPUT_METHODS).forEach {
+            resolver.registerContentObserver(Settings.Secure.getUriFor(it), false, observer)
+        }
+        onDispose { resolver.unregisterContentObserver(observer) }
     }
     // Opened from the keyboard: go where the user needs to be.
     LaunchedEffect(section) {
         when (section) {
             "permission" -> requestMic { model.refreshSetup() }
             "model" -> { tab = Tab.You; settingsArea = "model" }
+            "languages" -> { tab = Tab.You; settingsArea = "languages" }
             "settings" -> tab = Tab.You
         }
         if (section != null) onSectionHandled()
@@ -134,6 +160,33 @@ fun AppRoot(section: String?, onSectionHandled: () -> Unit, requestMic: ((Boolea
             }
         }
         Toast(model.message, Modifier.align(Alignment.BottomCenter)) { model.message = null }
+        DownloadDialog(model)
+    }
+}
+
+/** Before a big download: on mobile data, ask; without the room for it, say so. */
+@Composable
+private fun DownloadDialog(model: AppModel) {
+    val pending = model.pendingDownload ?: return
+    val c = Tokens.colors
+    Dialog(onDismissRequest = model::dismissDownload) {
+        Panel {
+            val noSpace = pending.check == DownloadCheck.NoSpace
+            Text(if (noSpace) "Not enough space" else "Download on mobile data?", style = HamsType.heading, color = c.text)
+            Spacer(Modifier.height(8.dp))
+            Muted(
+                if (noSpace) "${pending.label} needs about ${pending.sizeMb} MB of free space. Free some up, then try again."
+                else "${pending.label} is ${pending.sizeMb} MB and you're on a metered connection (mobile data or a hotspot). It's downloaded once, and Hams carries on from where it stopped if it's interrupted.",
+            )
+            Spacer(Modifier.height(20.dp))
+            if (noSpace) {
+                PrimaryButton("OK", model::dismissDownload, Modifier.fillMaxWidth())
+            } else {
+                PrimaryButton("Download anyway", model::confirmDownload, Modifier.fillMaxWidth())
+                Spacer(Modifier.height(4.dp))
+                QuietButton("Wait for Wi-Fi", model::dismissDownload, Modifier.fillMaxWidth())
+            }
+        }
     }
 }
 
@@ -226,6 +279,20 @@ fun openKeyboardSettings(context: Context) {
 
 fun showKeyboardPicker(context: Context) {
     context.getSystemService(InputMethodManager::class.java)?.showInputMethodPicker()
+}
+
+/**
+ * Whether Android would still show the microphone prompt. Only meaningful right
+ * after the user refused it (before the first prompt it is also false); see
+ * [micAskAfterRefusal].
+ */
+fun micPromptCanBeShownAgain(context: Context): Boolean {
+    var current: Context? = context
+    while (current is ContextWrapper) {
+        if (current is Activity) return ActivityCompat.shouldShowRequestPermissionRationale(current, Manifest.permission.RECORD_AUDIO)
+        current = current.baseContext
+    }
+    return false
 }
 
 fun openAppSettings(context: Context) {

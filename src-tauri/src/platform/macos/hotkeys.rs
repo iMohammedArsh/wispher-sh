@@ -6,7 +6,7 @@
 //! matching and sending a message, so macOS never disables the tap for being slow.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering};
 use std::sync::Arc;
 
 use core_foundation::base::TCFType;
@@ -62,8 +62,32 @@ struct TapContext {
     actions: UnboundedSender<HotkeyAction>,
     port: AtomicPtr<c_void>,
     can_swallow: bool,
+    /// Set when a newer tap replaced this one; the callback then passes every
+    /// event through untouched.
+    retired: AtomicBool,
 }
 
+const MODE_OFF: u8 = 0;
+const MODE_LISTEN_ONLY: u8 = 1;
+const MODE_ACTIVE: u8 = 2;
+
+/// The tap that is currently live (contexts are leaked on purpose, so the
+/// pointer stays valid) and how it runs.
+static CURRENT: AtomicPtr<TapContext> = AtomicPtr::new(std::ptr::null_mut());
+static MODE: AtomicU8 = AtomicU8::new(MODE_OFF);
+
+pub fn hotkey_mode() -> crate::platform::HotkeyMode {
+    use crate::platform::HotkeyMode;
+    match MODE.load(Ordering::Acquire) {
+        MODE_ACTIVE => HotkeyMode::Active,
+        MODE_LISTEN_ONLY => HotkeyMode::ListenOnly,
+        _ => HotkeyMode::Off,
+    }
+}
+
+/// Start the listener. Calling it again (after Accessibility was granted) builds
+/// a fresh tap, and only then retires the old one, so a failed retry never
+/// leaves the user without a working shortcut.
 pub fn start_hotkeys(
     matcher: Arc<Mutex<Matcher>>,
     recording: Arc<AtomicBool>,
@@ -84,6 +108,7 @@ pub fn start_hotkeys(
                     actions: actions.clone(),
                     port: AtomicPtr::new(std::ptr::null_mut()),
                     can_swallow,
+                    retired: AtomicBool::new(false),
                 }))
             };
 
@@ -114,6 +139,18 @@ pub fn start_hotkeys(
                 let source = CFRunLoopSource::wrap_under_create_rule(source as _);
                 CFRunLoop::get_current().add_source(&source, kCFRunLoopCommonModes);
                 CGEventTapEnable(port, true);
+
+                // The new tap is live: retire the previous one (if any).
+                let previous = CURRENT.swap(context, Ordering::AcqRel);
+                if !previous.is_null() {
+                    (*previous).retired.store(true, Ordering::Release);
+                    let old_port = (*previous).port.load(Ordering::Acquire);
+                    if !old_port.is_null() {
+                        CGEventTapEnable(old_port, false);
+                    }
+                }
+                let mode = if (*context).can_swallow { MODE_ACTIVE } else { MODE_LISTEN_ONLY };
+                MODE.store(mode, Ordering::Release);
             }
             tracing::info!("Keyboard shortcuts active");
             let _ = ready_tx.send(Ok(()));
@@ -128,6 +165,10 @@ pub fn start_hotkeys(
 
 extern "C" fn tap_callback(_proxy: *mut c_void, event_type: u32, event: CGEventRef, info: *mut c_void) -> CGEventRef {
     let context = unsafe { &*(info as *const TapContext) };
+    if context.retired.load(Ordering::Acquire) {
+        // Replaced by a newer tap: never re-enable ourselves or act on keys.
+        return event;
+    }
     if event_type == TAP_DISABLED_BY_TIMEOUT || event_type == TAP_DISABLED_BY_USER {
         let port = context.port.load(Ordering::Acquire);
         if !port.is_null() {

@@ -863,6 +863,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_hams_mobile_checksum_method_hamsengine_is_recording(
     ): Int
+    external fun uniffi_hams_mobile_checksum_method_hamsengine_languages_json(
+    ): Int
     external fun uniffi_hams_mobile_checksum_method_hamsengine_last_dictation(
     ): Int
     external fun uniffi_hams_mobile_checksum_method_hamsengine_model_ready(
@@ -879,6 +881,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_hams_mobile_checksum_method_hamsengine_recent_apps_json(
     ): Int
+    external fun uniffi_hams_mobile_checksum_method_hamsengine_recommended_model(
+    ): Int
     external fun uniffi_hams_mobile_checksum_method_hamsengine_release(
     ): Int
     external fun uniffi_hams_mobile_checksum_method_hamsengine_release_model(
@@ -888,6 +892,10 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_hams_mobile_checksum_method_hamsengine_save_settings_json(
     ): Int
     external fun uniffi_hams_mobile_checksum_method_hamsengine_set_api_key(
+    ): Int
+    external fun uniffi_hams_mobile_checksum_method_hamsengine_set_language(
+    ): Int
+    external fun uniffi_hams_mobile_checksum_method_hamsengine_set_languages(
     ): Int
     external fun uniffi_hams_mobile_checksum_method_hamsengine_settings_json(
     ): Int
@@ -1020,6 +1028,8 @@ internal object UniffiLib {
     ): Int
     external fun uniffi_hams_mobile_fn_method_hamsengine_is_recording(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_hams_mobile_fn_method_hamsengine_languages_json(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_hams_mobile_fn_method_hamsengine_last_dictation(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_hams_mobile_fn_method_hamsengine_model_ready(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -1036,6 +1046,8 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_hams_mobile_fn_method_hamsengine_recent_apps_json(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_hams_mobile_fn_method_hamsengine_recommended_model(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_hams_mobile_fn_method_hamsengine_release(`ptr`: Long,`pad`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_hams_mobile_fn_method_hamsengine_release_model(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -1045,6 +1057,10 @@ internal object UniffiLib {
     external fun uniffi_hams_mobile_fn_method_hamsengine_save_settings_json(`ptr`: Long,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_hams_mobile_fn_method_hamsengine_set_api_key(`ptr`: Long,`provider`: RustBuffer.ByValue,`key`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_hams_mobile_fn_method_hamsengine_set_language(`ptr`: Long,`code`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_hams_mobile_fn_method_hamsengine_set_languages(`ptr`: Long,`codes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_hams_mobile_fn_method_hamsengine_settings_json(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1298,13 +1314,16 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_hams_mobile_checksum_method_hamsengine_is_recording() and 0xFFFF) != 51647) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_hams_mobile_checksum_method_hamsengine_languages_json() and 0xFFFF) != 4305) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_hams_mobile_checksum_method_hamsengine_last_dictation() and 0xFFFF) != 49921) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_hams_mobile_checksum_method_hamsengine_model_ready() and 0xFFFF) != 22554) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_hams_mobile_checksum_method_hamsengine_models_json() and 0xFFFF) != 38770) {
+    if ((lib.uniffi_hams_mobile_checksum_method_hamsengine_models_json() and 0xFFFF) != 59521) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_hams_mobile_checksum_method_hamsengine_press() and 0xFFFF) != 13682) {
@@ -1322,6 +1341,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_hams_mobile_checksum_method_hamsengine_recent_apps_json() and 0xFFFF) != 39845) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_hams_mobile_checksum_method_hamsengine_recommended_model() and 0xFFFF) != 20979) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_hams_mobile_checksum_method_hamsengine_release() and 0xFFFF) != 43479) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1335,6 +1357,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_hams_mobile_checksum_method_hamsengine_set_api_key() and 0xFFFF) != 49454) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_hams_mobile_checksum_method_hamsengine_set_language() and 0xFFFF) != 18645) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_hams_mobile_checksum_method_hamsengine_set_languages() and 0xFFFF) != 46246) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_hams_mobile_checksum_method_hamsengine_settings_json() and 0xFFFF) != 62790) {
@@ -2342,6 +2370,11 @@ public interface HamsEngineInterface {
     fun `isRecording`(): kotlin.Boolean
     
     /**
+     * JSON array of every language Whisper can write: `{code, name, native}`.
+     */
+    fun `languagesJson`(): kotlin.String
+    
+    /**
      * Blocking (disk). The newest dictation, for the Heard / Written strip.
      */
     fun `lastDictation`(): Dictation?
@@ -2352,7 +2385,9 @@ public interface HamsEngineInterface {
     fun `modelReady`(): kotlin.Boolean
     
     /**
-     * JSON array of phone models: `{id, file, label, size_mb, multilingual, note, mobile, installed}`.
+     * JSON array of phone models: `{id, file, label, size_mb, multilingual,
+     * note, mobile, installed, recommended}`. `recommended` marks the one that
+     * suits the user's languages.
      */
     fun `modelsJson`(): kotlin.String
     
@@ -2383,6 +2418,11 @@ public interface HamsEngineInterface {
     fun `recentAppsJson`(): kotlin.String
     
     /**
+     * The phone model that suits the user's languages.
+     */
+    fun `recommendedModel`(): kotlin.String
+    
+    /**
      * The mic pad came up.
      */
     fun `release`(`pad`: Pad)
@@ -2409,6 +2449,21 @@ public interface HamsEngineInterface {
      * Save (or with an empty key, remove) the API key for `provider` ("gemini", "anthropic", …).
      */
     fun `setApiKey`(`provider`: kotlin.String, `key`: kotlin.String)
+    
+    /**
+     * Blocking (disk). Dictate in one language, or "auto" to detect among
+     * the user's languages. The keyboard's language chip uses this.
+     */
+    fun `setLanguage`(`code`: kotlin.String)
+    
+    /**
+     * Blocking (disk). Save the languages the user speaks, main first.
+     * One language is fixed (no detection pass, so dictation is faster);
+     * with several, detection picks among them unless one was already pinned
+     * and is still on the list. With no model downloaded yet, the model that
+     * suits these languages is chosen so setup downloads the right one.
+     */
+    fun `setLanguages`(`codes`: List<kotlin.String>)
     
     /**
      * `{"settings": {...}, "has_api_key": bool}`. The settings object is the
@@ -2848,6 +2903,23 @@ open class HamsEngine: Disposable, AutoCloseable, HamsEngineInterface
 
     
     /**
+     * JSON array of every language Whisper can write: `{code, name, native}`.
+     */
+    @Throws(HamsException::class)override fun `languagesJson`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithHandle {
+    uniffiRustCallWithError(HamsException) { _status ->
+    UniffiLib.uniffi_hams_mobile_fn_method_hamsengine_languages_json(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Blocking (disk). The newest dictation, for the Heard / Written strip.
      */override fun `lastDictation`(): Dictation? {
             return FfiConverterOptionalTypeDictation.lift(
@@ -2880,7 +2952,9 @@ open class HamsEngine: Disposable, AutoCloseable, HamsEngineInterface
 
     
     /**
-     * JSON array of phone models: `{id, file, label, size_mb, multilingual, note, mobile, installed}`.
+     * JSON array of phone models: `{id, file, label, size_mb, multilingual,
+     * note, mobile, installed, recommended}`. `recommended` marks the one that
+     * suits the user's languages.
      */
     @Throws(HamsException::class)override fun `modelsJson`(): kotlin.String {
             return FfiConverterString.lift(
@@ -2982,6 +3056,22 @@ open class HamsEngine: Disposable, AutoCloseable, HamsEngineInterface
 
     
     /**
+     * The phone model that suits the user's languages.
+     */override fun `recommendedModel`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_hams_mobile_fn_method_hamsengine_recommended_model(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * The mic pad came up.
      */override fun `release`(`pad`: Pad)
         = 
@@ -3062,6 +3152,45 @@ open class HamsEngine: Disposable, AutoCloseable, HamsEngineInterface
         
         FfiConverterString.lower(`provider`),
         FfiConverterString.lower(`key`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Blocking (disk). Dictate in one language, or "auto" to detect among
+     * the user's languages. The keyboard's language chip uses this.
+     */
+    @Throws(HamsException::class)override fun `setLanguage`(`code`: kotlin.String)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(HamsException) { _status ->
+    UniffiLib.uniffi_hams_mobile_fn_method_hamsengine_set_language(
+        it,
+        
+        FfiConverterString.lower(`code`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Blocking (disk). Save the languages the user speaks, main first.
+     * One language is fixed (no detection pass, so dictation is faster);
+     * with several, detection picks among them unless one was already pinned
+     * and is still on the list. With no model downloaded yet, the model that
+     * suits these languages is chosen so setup downloads the right one.
+     */
+    @Throws(HamsException::class)override fun `setLanguages`(`codes`: List<kotlin.String>)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(HamsException) { _status ->
+    UniffiLib.uniffi_hams_mobile_fn_method_hamsengine_set_languages(
+        it,
+        
+        FfiConverterSequenceString.lower(`codes`),_status)
 }
     }
     
@@ -4990,6 +5119,34 @@ public object FfiConverterSequenceFloat: FfiConverterRustBuffer<List<kotlin.Floa
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterFloat.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
+    override fun read(buf: ByteBuffer): List<kotlin.String> {
+        val len = buf.getInt()
+        return List<kotlin.String>(len) {
+            FfiConverterString.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.String>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterString.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.String>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterString.write(it, buf)
         }
     }
 }

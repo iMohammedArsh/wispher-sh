@@ -32,4 +32,4 @@ specta = { version = "=2.0.0-rc.28", features = ["derive"], optional = true }
 whisper-rs = { version = "0.15", optional = true, features = ["metal"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "test-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "test-util", "net", "io-util"] }

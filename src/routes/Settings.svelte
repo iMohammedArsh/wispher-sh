@@ -1,6 +1,6 @@
 <script lang="ts">
   // Settings: one view per area, picked from the list on the left. Every control saves itself.
-  import { api, errorText, on, type AiProvider, type DeliveryMode, type ModelProgress, type ModelStatus, type Permissions, type RestyleResult } from "../lib/ipc";
+  import { api, errorText, on, type AiProvider, type DeliveryMode, type ModelProgress, type ModelStatus, type RestyleResult } from "../lib/ipc";
   import { app, type SettingsArea } from "../lib/state.svelte";
   import { shortcutLabel } from "../lib/format";
   import ConfirmButton from "../components/ConfirmButton.svelte";
@@ -10,7 +10,7 @@
   let models = $state.raw<ModelStatus[]>([]);
   let progress = $state<Record<string, number>>({});
   let microphones = $state.raw<string[]>([]);
-  let permissions = $state.raw<Permissions | null>(null);
+  const permissions = $derived(app.permissions);
   let shortcuts = $state({ dictate: "", command: "", paste: "" });
   let apiKey = $state("");
   let defaultModel = $state("");
@@ -28,7 +28,7 @@
   $effect(() => {
     api.models().then((m) => (models = m)).catch(() => {});
     api.microphones().then((m) => (microphones = m)).catch(() => {});
-    api.permissions().then((p) => (permissions = p)).catch(() => {});
+    void app.refreshPermissions();
     api.autostartEnabled().then((v) => (openAtLogin = v)).catch(() => {});
     api.appVersion().then((v) => (version = v)).catch(() => {});
     const off = on<ModelProgress>("model-progress", (p) => (progress = { ...progress, [p.id]: p.progress ?? 0 }));
@@ -54,11 +54,52 @@
         { id: "ai", label: "AI polish", sub: "Optional. Fixes grammar, follows each app's style, edits selected text and summarises notes. Only text is sent, never audio." },
         { id: "learning", label: "Learning", sub: "Hams learns your words from corrections. It only suggests; you approve each one in Dictionary." },
         { id: "updates", label: "Updates", sub: "New versions are signed, and Hams checks the signature before installing anything." },
-        { id: "permissions", label: "Permissions", sub: "macOS asks for these once." },
+        { id: "health", label: "Health", sub: "Whether everything Hams needs is working, with a fix for each thing that isn't." },
       ] satisfies { id: SettingsArea; label: string; sub: string }[]
-    ).filter((a) => a.id !== "permissions" || permissions?.applicable),
+    ),
   );
   const area = $derived(areas.find((a) => a.id === app.settingsArea) ?? areas[0]);
+
+  // Health: one row per thing Hams needs, each with its fix.
+  const modelReady = $derived(models.length === 0 || models.some((m) => m.id === s?.model && m.installed));
+  const accessOk = $derived(!permissions?.applicable || permissions.accessibility);
+  const micState = $derived(permissions?.microphone ?? "unknown");
+  const shortcutRunning = $derived(permissions?.hotkeys === "active" || permissions === null);
+  const needsAttention = $derived(!accessOk || micState === "denied" || !shortcutRunning || !modelReady);
+  let testingAi = $state(false);
+
+  // Ollama: ask what's installed, so a wrong or missing model shows up here and not as a failed dictation.
+  let ollama = $state<{ models: string[] } | { error: string } | null>(null);
+  async function checkOllama() {
+    ollama = null;
+    try {
+      ollama = { models: await api.ollamaModels() };
+    } catch (error) {
+      ollama = { error: errorText(error) };
+    }
+  }
+  $effect(() => {
+    if (app.settingsArea === "ai" && s?.ai.provider === "ollama") void checkOllama();
+  });
+  const ollamaModel = $derived(s?.ai.model.trim() || defaultModel);
+  // `llama3.2` matches an installed `llama3.2:latest`.
+  const ollamaHas = (models: string[], name: string) => models.some((m) => m === name || m.split(":")[0] === name);
+
+  async function testAi() {
+    testingAi = true;
+    try {
+      await api.testAi();
+      app.notify("AI polish works");
+    } catch (error) {
+      app.notify(errorText(error), "error");
+    } finally {
+      testingAi = false;
+    }
+  }
+
+  async function copyReport() {
+    await app.run(async () => api.copy(await api.diagnosticReport()), "Copied. Paste it into your bug report.");
+  }
 
   const presets = $derived(
     mac
@@ -183,7 +224,7 @@
         <button class:active={a.id === area.id} aria-current={a.id === area.id ? "page" : undefined} onclick={() => (app.settingsArea = a.id)}>
           {a.label}
           {#if a.id === "updates" && app.update}<span class="dot" title="Update ready"></span>{/if}
-          {#if a.id === "permissions" && permissions && !permissions.accessibility}<span class="dot warn" title="Needs attention"></span>{/if}
+          {#if a.id === "health" && needsAttention}<span class="dot warn" title="Needs attention"></span>{/if}
         </button>
       {/each}
     </nav>
@@ -374,6 +415,33 @@
                 onchange={(e) => app.save({ ai: { ...s.ai, base_url: e.currentTarget.value } })} />
             </label>
           {/if}
+          {#if s.ai.provider === "ollama"}
+            <div class="ollama" aria-live="polite">
+              {#if ollama === null}
+                <span class="muted small">Looking for Ollama…</span>
+              {:else if "error" in ollama}
+                <p class="small error">{ollama.error}</p>
+                <div class="row">
+                  <button class="small" onclick={checkOllama}>Check again</button>
+                  <span class="muted small">Then run <kbd>ollama pull {ollamaModel || "llama3.2"}</kbd> once.</span>
+                </div>
+              {:else if ollama.models.length === 0}
+                <p class="small">Ollama is running, but has no models yet.</p>
+                <span class="muted small">Run <kbd>ollama pull {ollamaModel || "llama3.2"}</kbd> in a terminal, then check again.</span>
+                <div><button class="small" onclick={checkOllama}>Check again</button></div>
+              {:else}
+                <p class="small">Ollama is running. Pick a model it has:</p>
+                <div class="row wrap">
+                  {#each ollama.models as m (m)}
+                    <button class="small" class:chosen={m === s.ai.model || (!s.ai.model.trim() && ollamaHas([m], defaultModel))} onclick={() => app.save({ ai: { ...s.ai, model: m } })}>{m}</button>
+                  {/each}
+                </div>
+                {#if ollamaModel && !ollamaHas(ollama.models, ollamaModel)}
+                  <p class="small error">“{ollamaModel}” isn't installed. Pick one above, or run <kbd>ollama pull {ollamaModel}</kbd>.</p>
+                {/if}
+              {/if}
+            </div>
+          {/if}
           {#if providerInfo?.key}
             <div class="field">
               <span>API key <span class="hint">{app.view?.has_api_key ? "Saved in your keychain" : "Kept in your keychain, never in a file"}</span></span>
@@ -464,18 +532,47 @@
           {@render toggle("Check for updates automatically", "Hams only downloads an update when you click Install.", s.check_updates, (v) => app.save({ check_updates: v }))}
         </div>
 
-      {:else if area.id === "permissions" && permissions}
+      {:else if area.id === "health"}
         <ul class="panel flush rows">
           <li class="spread">
-            <span><strong class="label">Accessibility</strong><span class="small muted block">Shortcut, paste, selected text and learning from fields</span></span>
-            {#if permissions.accessibility}<span class="pill ok">Allowed</span>{:else}<button class="small" onclick={() => api.openPermissionSettings("accessibility")}>Open System Settings</button>{/if}
+            <span><strong class="label">Shortcut</strong><span class="small muted block">The keys you hold to talk</span></span>
+            {#if shortcutRunning}<span class="pill ok">Running</span>
+            {:else if app.needsRestart}<button class="small" onclick={() => api.restartApp()}>Restart Hams</button>
+            {:else if !accessOk}<button class="small" onclick={() => api.openPermissionSettings("accessibility")}>Open System Settings</button>
+            {:else}<span class="pill warn">Starting…</span>{/if}
+          </li>
+          {#if permissions?.applicable}
+            <li class="spread">
+              <span><strong class="label">Accessibility</strong><span class="small muted block">Shortcut, paste, selected text and learning from fields</span></span>
+              {#if accessOk}<span class="pill ok">Allowed</span>{:else}<button class="small" onclick={() => api.openPermissionSettings("accessibility")}>Open System Settings</button>{/if}
+            </li>
+          {/if}
+          <li class="spread">
+            <span><strong class="label">Microphone</strong><span class="small muted block">Only open while you dictate</span></span>
+            {#if micState === "granted"}<span class="pill ok">Allowed</span>
+            {:else if micState === "undetermined"}<button class="small" onclick={async () => { await api.requestMicrophone(); setTimeout(() => void app.refreshPermissions(), 1500); }}>Allow</button>
+            {:else}<button class="small" onclick={() => api.openPermissionSettings("microphone")}>{micState === "denied" ? "Turn on in System Settings" : "Open microphone settings"}</button>{/if}
           </li>
           <li class="spread">
-            <span><strong class="label">Microphone</strong><span class="small muted block">macOS asks the first time you dictate</span></span>
-            <button class="small" onclick={() => api.openPermissionSettings("microphone")}>Open System Settings</button>
+            <span><strong class="label">Speech model</strong><span class="small muted block">{s.model}</span></span>
+            {#if modelReady}<span class="pill ok">Ready</span>{:else}<button class="small" onclick={() => (app.settingsArea = "speech")}>Download</button>{/if}
+          </li>
+          <li class="spread">
+            <span>
+              <strong class="label">AI polish</strong>
+              <span class="small muted block">{s.ai.provider === "off" ? "Off. Everything stays on this computer." : app.view?.has_api_key || !providers.find((p) => p.id === s.ai.provider)?.key ? "Ready to test" : "No API key saved yet"}</span>
+            </span>
+            {#if s.ai.provider === "off"}<button class="small" onclick={() => (app.settingsArea = "ai")}>Set up</button>
+            {:else}<button class="small" disabled={testingAi} onclick={testAi}>{testingAi ? "Testing…" : "Test"}</button>{/if}
           </li>
         </ul>
-        <p class="muted small">Signing Hams with the local certificate keeps these permissions across updates.</p>
+        <div class="row">
+          <button onclick={copyReport}>Copy diagnostic report</button>
+          <span class="muted small">Settings and permission state only. No dictated text, keys or logs.</span>
+        </div>
+        {#if permissions?.applicable}
+          <p class="muted small">Signing Hams with the local certificate keeps these permissions across updates.</p>
+        {/if}
       {/if}
     </div>
   </div>
@@ -493,6 +590,11 @@
   .view { max-width: 720px; }
 
   .block { display: block; }
+  .ollama { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; background: var(--raised); border-radius: var(--radius-card); }
+  .ollama p { margin: 0; }
+  .row.wrap { flex-wrap: wrap; }
+  .ollama button.chosen { border-color: var(--data); background: var(--data-1); }
+  .error { color: var(--negative); }
   .label { font-weight: 500; }
   .panel > .switch-row:first-child { padding-top: 0; }
   .stack { gap: 16px; }

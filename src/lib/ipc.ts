@@ -28,6 +28,8 @@ export type ModelStatus = Rust.ModelStatus;
 export type ModelProgress = Rust.ModelProgress;
 export type StyleInfo = Rust.StyleInfo;
 export type Permissions = Rust.Permissions;
+export type HotkeyMode = Rust.HotkeyMode;
+export type MicPermission = Rust.MicPermission;
 export type RestyleResult = Rust.RestyleResult;
 export type UpdateInfo = Rust.UpdateInfo;
 export type UpdateProgress = Rust.UpdateProgress_Serialize;
@@ -57,6 +59,8 @@ export const api = {
   models: () => call<ModelStatus[]>("list_models"),
   downloadModel: (id: string) => call<void>("download_model", { id }),
   deleteModel: (id: string) => call<void>("delete_model", { id }),
+  /** Stops a download. What was received is kept, so downloading again resumes. */
+  cancelModelDownload: (id: string) => call<void>("cancel_model_download", { id }),
   history: (query = "", limit?: number) => call<HistoryItem[]>("history", { query, limit }),
   historyRecent: (limit: number) => call<HistoryItem[]>("history_recent", { limit }),
   historyUpdate: (id: number, text: string) => call<number>("history_update", { id, text }),
@@ -78,11 +82,20 @@ export const api = {
   copy: (text: string) => call<void>("copy_text", { text }),
   permissions: () => call<Permissions>("permissions"),
   requestAccessibility: () => call<boolean>("request_accessibility"),
+  /** Shows the macOS microphone prompt; poll `permissions` for the answer. */
+  requestMicrophone: () => call<void>("request_microphone"),
+  /** Starts the shortcut listener again (after Accessibility was granted). */
+  retryHotkeys: () => call<HotkeyMode>("retry_hotkeys"),
+  restartApp: () => call<void>("restart_app"),
+  /** Plain-text state for a bug report: no dictated text, keys or log lines. */
+  diagnosticReport: () => call<string>("diagnostic_report"),
   openPermissionSettings: (kind: string) => call<void>("open_permission_settings", { kind }),
   styles: () => call<StyleInfo[]>("styles"),
   recentApps: () => call<string[]>("recent_apps"),
   defaultAiModel: (provider: AiProvider) => call<string>("default_ai_model", { provider }),
   testAi: () => call<string>("test_ai"),
+  /** The models a local Ollama has installed. Rejects with a readable reason when it can't be reached. */
+  ollamaModels: () => call<string[]>("ollama_models"),
   autostartEnabled: () => call<boolean>("autostart_enabled"),
   setAutostart: (enabled: boolean) => call<void>("set_autostart", { enabled }),
   appVersion: () => call<string>("app_version"),

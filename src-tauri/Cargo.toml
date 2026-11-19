@@ -43,6 +43,8 @@ core-foundation = "0.10"
 security-framework = "3"
 core-graphics = "0.24"
 objc2 = "0.6"
+# Completion block for the microphone permission request.
+block2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString"] }
 objc2-app-kit = { version = "0.3", features = ["NSRunningApplication", "NSWorkspace", "NSWindow", "NSResponder"] }
 

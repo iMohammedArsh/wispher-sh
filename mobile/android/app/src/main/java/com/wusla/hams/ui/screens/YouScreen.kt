@@ -23,7 +23,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.wusla.hams.R
 import com.wusla.hams.core.AI_PROVIDERS
-import com.wusla.hams.core.LANGUAGES
 import com.wusla.hams.core.Stats
 import com.wusla.hams.ui.AppModel
 import com.wusla.hams.ui.components.Panel
@@ -42,7 +41,12 @@ fun YouIndex(model: AppModel, setArea: (String) -> Unit) {
     val c = Tokens.colors
     val s = model.settings ?: return
     val modelLabel = model.models.firstOrNull { it.id == s.model }?.let { if (it.installed) it.label else "${it.label} · not downloaded" } ?: s.model
-    val language = LANGUAGES.firstOrNull { it.first == s.language }?.second ?: s.language
+    val mine = s.languages.mapNotNull { model.lang(it)?.native }
+    val languages = when {
+        mine.isEmpty() -> "Add yours"
+        mine.size <= 2 -> mine.joinToString(" · ")
+        else -> mine.take(2).joinToString(" · ") + " +${mine.size - 2}"
+    }
     val provider = AI_PROVIDERS.firstOrNull { it.first == s.aiProvider }?.second?.substringBefore(" (") ?: s.aiProvider
 
     Text("You", style = HamsType.display.copy(fontSize = HamsType.title.fontSize * 1.15f), color = c.text, modifier = Modifier.padding(top = 12.dp, bottom = 16.dp))
@@ -58,12 +62,17 @@ fun YouIndex(model: AppModel, setArea: (String) -> Unit) {
 
     SectionTitle("Speech")
     Panel(padding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)) {
-        ValueRow("Speech model", modelLabel, { setArea("model") }, "Runs on this phone", icon = R.drawable.ic_mic)
-        ValueRow("Language and clean-up", language, { setArea("speech") }, icon = R.drawable.ic_globe)
+        ValueRow("Languages", languages, { setArea("languages") }, icon = R.drawable.ic_globe)
+        ValueRow("Speech pack", modelLabel, { setArea("model") }, "Runs on this phone", icon = R.drawable.ic_mic)
+        ValueRow("Clean-up", "", { setArea("speech") }, "Fillers, voice commands, hands-free", icon = R.drawable.ic_wand)
     }
 
     SectionTitle("Phone")
     Panel(padding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)) {
+        ValueRow(
+            "Setup check", if (model.setup.complete) "All good" else "${model.setup.missing} to fix", { setArea("setup") },
+            "Keyboard, mic and speech pack", icon = R.drawable.ic_shield,
+        )
         ValueRow("Keyboard", "", { openKeyboardSettings(context) }, "Turn Hams on or off in Android settings", icon = R.drawable.ic_keyboard)
         ValueRow("Privacy", "", { setArea("privacy") }, "Everything stays on this phone", icon = R.drawable.ic_shield)
     }

@@ -23,6 +23,7 @@ pub struct SettingsView {
     has_api_key: bool,
     platform: Platform,
     hotkey_error: Option<String>,
+    hotkey_mode: platform::HotkeyMode,
 }
 
 #[derive(Serialize)]
@@ -42,6 +43,7 @@ pub fn get_settings(state: State<AppState>) -> SettingsView {
         has_api_key,
         platform: if cfg!(target_os = "macos") { Platform::Macos } else { Platform::Windows },
         hotkey_error: state.hotkey_error.lock().clone(),
+        hotkey_mode: platform::hotkey_mode(),
     }
 }
 
@@ -126,15 +128,40 @@ pub struct ModelProgress<'a> {
 
 #[tauri::command]
 pub async fn download_model(app: AppHandle, state: State<'_, AppState>, id: String) -> AppResult<()> {
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        // Two writers on one .part file would corrupt it.
+        let mut downloads = state.downloads.lock();
+        if downloads.contains_key(&id) {
+            return Err(AppError::Model("this model is already downloading".into()));
+        }
+        downloads.insert(id.clone(), Arc::clone(&cancel));
+    }
     let emit_id = id.clone();
-    models::download(&id, |progress| {
+    let result = models::download_cancellable(&id, cancel, |progress| {
         let _ = app.emit("model-progress", ModelProgress { id: &emit_id, progress });
     })
-    .await?;
-    if state.settings.get().model == id {
-        state.warm_up(&id);
+    .await;
+    state.downloads.lock().remove(&id);
+    match result {
+        Ok(_) => {
+            if state.settings.get().model == id {
+                state.warm_up(&id);
+            }
+            Ok(())
+        }
+        // Cancelling isn't a failure: the UI just goes back to "Download".
+        Err(error) if models::was_cancelled(&error) => Ok(()),
+        Err(error) => Err(error),
     }
-    Ok(())
+}
+
+/// Stop a model download. What was received is kept, so downloading again resumes.
+#[tauri::command]
+pub fn cancel_model_download(state: State<AppState>, id: String) {
+    if let Some(flag) = state.downloads.lock().get(&id) {
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 #[tauri::command]
@@ -273,6 +300,84 @@ pub fn request_accessibility() -> bool {
     platform::request_accessibility()
 }
 
+/// Show the macOS microphone prompt now (during setup) instead of in the middle
+/// of the first dictation. The UI polls `permissions` for the answer.
+#[tauri::command]
+pub fn request_microphone() {
+    platform::request_microphone()
+}
+
+/// Start the keyboard listener again, for after the user granted Accessibility
+/// (a listen-only tap can't be upgraded in place). A failed retry keeps the
+/// old listener running; the error is only recorded when none is left.
+#[tauri::command]
+pub async fn retry_hotkeys(state: State<'_, AppState>) -> AppResult<platform::HotkeyMode> {
+    if platform::hotkey_mode() != platform::HotkeyMode::Active {
+        let (matcher, recording, tx) =
+            (Arc::clone(&state.matcher), Arc::clone(&state.recording), state.hotkey_tx.clone());
+        // Starting the tap waits for its thread, so keep it off the UI thread.
+        let started = tauri::async_runtime::spawn_blocking(move || platform::start_hotkeys(matcher, recording, tx))
+            .await
+            .map_err(|e| AppError::Other(e.to_string()))?;
+        match started {
+            Ok(()) => *state.hotkey_error.lock() = None,
+            Err(error) if platform::hotkey_mode() == platform::HotkeyMode::Off => {
+                *state.hotkey_error.lock() = Some(error.to_string());
+                return Err(error);
+            }
+            Err(error) => tracing::warn!("retrying the keyboard listener failed: {error}"),
+        }
+    } else {
+        *state.hotkey_error.lock() = None;
+    }
+    Ok(platform::hotkey_mode())
+}
+
+/// Plain-text facts for a bug report, copied from Settings → Health. Only
+/// structured state goes in: never dictated text, API keys, custom endpoints
+/// or log lines (errors can echo provider responses).
+fn diagnostic_text(
+    version: &str,
+    settings: &Settings,
+    model_installed: bool,
+    has_api_key: bool,
+    permissions: &platform::Permissions,
+    hotkey_error: Option<&str>,
+) -> String {
+    let yes = |b: bool| if b { "yes" } else { "no" };
+    let mut lines = vec![
+        format!("Hams {version} on {} ({})", std::env::consts::OS, std::env::consts::ARCH),
+        format!("Speech model: {} (downloaded: {})", settings.model, yes(model_installed)),
+        format!("Language: {}", settings.language),
+        format!("Delivery: {:?}", settings.delivery),
+        format!("AI polish: {:?} (key saved: {})", settings.ai.provider, yes(has_api_key)),
+        format!("Shortcut listener: {:?}", permissions.hotkeys),
+    ];
+    if permissions.applicable {
+        lines.push(format!("Accessibility: {}", yes(permissions.accessibility)));
+        lines.push(format!("Microphone: {:?}", permissions.microphone));
+    }
+    if let Some(error) = hotkey_error {
+        lines.push(format!("Shortcut error: {error}"));
+    }
+    lines.join("\n")
+}
+
+#[tauri::command]
+pub fn diagnostic_report(app: AppHandle, state: State<AppState>) -> String {
+    let settings = state.settings.get();
+    let installed = models::statuses(false).iter().any(|m| m.info.id == settings.model && m.installed);
+    let has_key = state.secrets.has(settings.ai.provider);
+    let version = app.package_info().version.to_string();
+    diagnostic_text(&version, &settings, installed, has_key, &platform::permissions(), state.hotkey_error.lock().as_deref())
+}
+
+/// Relaunch Hams (the last resort when macOS still hasn't applied a permission).
+#[tauri::command]
+pub fn restart_app(app: AppHandle) {
+    app.restart();
+}
+
 #[tauri::command]
 pub fn open_permission_settings(kind: String) {
     platform::open_permission_settings(&kind)
@@ -307,6 +412,13 @@ pub fn default_ai_model(provider: AiProvider) -> &'static str {
 
 /// Send a sample sentence through the configured provider so the user can check
 /// their key and model before relying on them.
+/// What the local Ollama has installed, for Settings → AI polish. The error says
+/// why it couldn't be reached (not running, wrong address) in words to show as is.
+#[tauri::command]
+pub async fn ollama_models(state: State<'_, AppState>) -> AppResult<Vec<String>> {
+    llm::ollama::installed_models(&state.settings.get().ai.base_url).await
+}
+
 #[tauri::command]
 pub async fn test_ai(state: State<'_, AppState>) -> AppResult<String> {
     let polisher: Arc<dyn Polisher> = state.polisher_for(&state.settings.get());
@@ -349,4 +461,22 @@ pub async fn update_check(app: AppHandle) -> AppResult<Option<crate::updater::Up
 #[tauri::command]
 pub async fn update_install(app: AppHandle) -> AppResult<()> {
     crate::updater::install(&app).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_diagnostic_report_has_state_but_no_secrets() {
+        let mut settings = Settings::default();
+        settings.ai.base_url = "https://private.example.com/v1".into();
+        let permissions = platform::permissions();
+        let report = diagnostic_text("1.2.3", &settings, true, true, &permissions, Some("tap failed"));
+        assert!(report.starts_with("Hams 1.2.3 on "));
+        assert!(report.contains(&format!("Speech model: {} (downloaded: yes)", settings.model)));
+        assert!(report.contains("(key saved: yes)"));
+        assert!(report.contains("Shortcut error: tap failed"));
+        assert!(!report.contains("private.example.com"), "custom endpoints stay out of the report");
+    }
 }

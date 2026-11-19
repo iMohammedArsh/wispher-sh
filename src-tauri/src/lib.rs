@@ -107,7 +107,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // Keyboard shortcuts → controller.
     let matcher = Arc::new(Mutex::new(Matcher::new(state::bindings(&current))));
     let (hotkey_tx, mut hotkey_rx) = tokio::sync::mpsc::unbounded_channel();
-    let hotkey_error = match platform::start_hotkeys(Arc::clone(&matcher), recording, hotkey_tx) {
+    let hotkey_error = match platform::start_hotkeys(Arc::clone(&matcher), Arc::clone(&recording), hotkey_tx.clone()) {
         Ok(()) => None,
         Err(error) => {
             tracing::error!("{error}");
@@ -130,6 +130,9 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         ui,
         matcher,
         hotkey_error: Mutex::new(hotkey_error),
+        recording,
+        hotkey_tx,
+        downloads: Default::default(),
         stt,
         secrets,
     };
@@ -214,6 +217,7 @@ pub fn run() {
             commands::list_microphones,
             commands::list_models,
             commands::download_model,
+            commands::cancel_model_download,
             commands::delete_model,
             commands::history,
             commands::history_recent,
@@ -235,11 +239,16 @@ pub fn run() {
             commands::copy_text,
             commands::permissions,
             commands::request_accessibility,
+            commands::request_microphone,
+            commands::retry_hotkeys,
+            commands::restart_app,
+            commands::diagnostic_report,
             commands::open_permission_settings,
             commands::styles,
             commands::recent_apps,
             commands::default_ai_model,
             commands::test_ai,
+            commands::ollama_models,
             commands::autostart_enabled,
             commands::set_autostart,
             commands::app_version,

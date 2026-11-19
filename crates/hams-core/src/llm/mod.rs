@@ -1,6 +1,7 @@
 //! Optional AI polish: one HTTP call to the user's chosen provider, with a hard
 //! timeout. Any failure falls back to the locally cleaned text.
 
+pub mod ollama;
 pub mod prompts;
 pub mod styles;
 

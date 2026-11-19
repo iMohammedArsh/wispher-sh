@@ -1,3 +1,4 @@
+pub mod languages;
 pub mod models;
 #[cfg(feature = "local-stt")]
 mod whisper;

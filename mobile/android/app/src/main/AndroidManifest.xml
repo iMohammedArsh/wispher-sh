@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- Downloading the speech model, and the optional AI provider you choose. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Only to ask before a large download on mobile data. Nothing about the network is sent anywhere. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <uses-feature android:name="android.hardware.microphone" android:required="true" />

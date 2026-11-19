@@ -13,6 +13,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -33,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -44,10 +46,14 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import com.wusla.hams.core.Hams
+import com.wusla.hams.core.POPULAR_LANGUAGES
 import com.wusla.hams.ui.AppModel
 import com.wusla.hams.ui.TryField
 import com.wusla.hams.ui.TryFieldLifecycle
+import com.wusla.hams.ui.components.Chip
+import com.wusla.hams.ui.components.Field
 import com.wusla.hams.ui.components.HeardWritten
 import com.wusla.hams.ui.components.LinkButton
 import com.wusla.hams.ui.components.Orb
@@ -55,29 +61,36 @@ import com.wusla.hams.ui.components.OrbMood
 import com.wusla.hams.ui.components.Panel
 import com.wusla.hams.ui.components.PrimaryButton
 import com.wusla.hams.ui.components.QuietButton
+import com.wusla.hams.ui.MicAsk
 import com.wusla.hams.ui.holdToTalk
+import com.wusla.hams.ui.micAskAfterRefusal
+import com.wusla.hams.ui.micPromptCanBeShownAgain
 import com.wusla.hams.ui.openAppSettings
 import com.wusla.hams.ui.openKeyboardSettings
+import com.wusla.hams.ui.showKeyboardPicker
 import com.wusla.hams.ui.theme.HamsType
 import com.wusla.hams.ui.theme.Tokens
 
-private enum class Step { Welcome, Keyboard, Mic, Model, Try }
+private enum class Step { Welcome, Language, Keyboard, Select, Mic, Model, Try }
 
 /**
- * First run, one thing per screen: hello, turn on the keyboard, allow the
- * mic, get the model, then hold the orb and see what Hams wrote. Steps that
- * are already done are skipped; coming back from Android settings moves on
- * by itself.
+ * First run, one thing per screen: hello, the languages you speak, turn on
+ * the keyboard, switch to it, allow the mic, get the speech pack that suits
+ * your languages, then dictate and see what Hams wrote. Steps that are already
+ * done are skipped; coming back from Android settings moves on by itself.
  */
 @Composable
 fun OnboardingScreen(model: AppModel, requestMic: ((Boolean) -> Unit) -> Unit, onDone: () -> Unit) {
     val setup = model.setup
     var step by rememberSaveable { mutableStateOf(Step.Welcome) }
-    var micDenied by remember { mutableStateOf(false) }
+    var micAsk by rememberSaveable { mutableStateOf(MicAsk.Fresh) }
+    var confirmSkip by remember { mutableStateOf(false) }
     TryFieldLifecycle()
 
     fun nextAfter(current: Step): Step = when {
+        current < Step.Language && model.settings?.languages.isNullOrEmpty() -> Step.Language
         current < Step.Keyboard && !setup.keyboardEnabled -> Step.Keyboard
+        current < Step.Select && !setup.keyboardSelected -> Step.Select
         current < Step.Mic && !setup.micAllowed -> Step.Mic
         current < Step.Model && !setup.modelReady -> Step.Model
         else -> Step.Try
@@ -87,6 +100,7 @@ fun OnboardingScreen(model: AppModel, requestMic: ((Boolean) -> Unit) -> Unit, o
     LaunchedEffect(setup, step) {
         val done = when (step) {
             Step.Keyboard -> setup.keyboardEnabled
+            Step.Select -> setup.keyboardSelected
             Step.Mic -> setup.micAllowed
             Step.Model -> setup.modelReady
             else -> false
@@ -104,7 +118,8 @@ fun OnboardingScreen(model: AppModel, requestMic: ((Boolean) -> Unit) -> Unit, o
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().height(48.dp)) {
             Dots(step.ordinal, Step.entries.size, Modifier.weight(1f))
-            if (step != Step.Try) LinkButton("Skip", onDone, color = c.muted)
+            // Skipping with things missing leaves a keyboard that can't type: say so first.
+            if (step != Step.Try) LinkButton("Skip", { if (setup.complete) onDone() else confirmSkip = true }, color = c.muted)
         }
 
         AnimatedContent(
@@ -123,6 +138,8 @@ fun OnboardingScreen(model: AppModel, requestMic: ((Boolean) -> Unit) -> Unit, o
                     body = "Hold the orb and speak like you normally would. Hams takes out the ums, fixes the punctuation and types it for you. Your voice never leaves this phone.",
                 ) { PrimaryButton("Get started", { step = nextAfter(Step.Welcome) }, Modifier.fillMaxWidth()) }
 
+                Step.Language -> LanguagePage(model) { step = nextAfter(Step.Language) }
+
                 Step.Keyboard -> Page(
                     visual = { Orb(OrbMood.Idle, 0f, diameter = 200.dp) },
                     title = "Turn on the Hams keyboard",
@@ -132,20 +149,34 @@ fun OnboardingScreen(model: AppModel, requestMic: ((Boolean) -> Unit) -> Unit, o
                     PrimaryButton("Open keyboard settings", { openKeyboardSettings(context) }, Modifier.fillMaxWidth())
                 }
 
+                Step.Select -> Page(
+                    visual = { Orb(OrbMood.Idle, 0f, diameter = 200.dp) },
+                    title = "Switch to Hams",
+                    body = "Turning it on isn't enough: Android types with one keyboard at a time. Pick Hams from the list. You can switch back any time with the globe key.",
+                ) {
+                    val context = LocalContext.current
+                    PrimaryButton("Choose Hams", { showKeyboardPicker(context) }, Modifier.fillMaxWidth())
+                }
+
                 Step.Mic -> Page(
                     visual = { Orb(OrbMood.Idle, 0f, diameter = 200.dp) },
                     title = "Let Hams hear you",
                     body = "The microphone is on only while you hold the orb. Nothing is recorded in the background.",
                 ) {
                     val context = LocalContext.current
-                    if (micDenied) {
+                    if (micAsk == MicAsk.Blocked) {
                         Text("Android won't ask again. Allow it in Hams's app settings → Permissions.", style = HamsType.body, color = c.muted, textAlign = TextAlign.Center)
                         Spacer(Modifier.height(12.dp))
                         PrimaryButton("Open app settings", { openAppSettings(context) }, Modifier.fillMaxWidth())
                     } else {
+                        if (micAsk == MicAsk.Retry) {
+                            Text("Hams can't hear you without it. It only listens while you hold the orb.", style = HamsType.body, color = c.muted, textAlign = TextAlign.Center)
+                            Spacer(Modifier.height(12.dp))
+                        }
                         PrimaryButton("Allow microphone", {
                             requestMic { granted ->
-                                micDenied = !granted
+                                // Read the rationale now, right after the refusal: before the first prompt it is also false.
+                                micAsk = if (granted) MicAsk.Fresh else micAskAfterRefusal(micPromptCanBeShownAgain(context))
                                 model.refreshSetup()
                             }
                         }, Modifier.fillMaxWidth())
@@ -156,6 +187,26 @@ fun OnboardingScreen(model: AppModel, requestMic: ((Boolean) -> Unit) -> Unit, o
 
                 Step.Try -> TryPage(model, onDone)
             }
+        }
+    }
+    if (confirmSkip) SkipDialog(onSkip = onDone, onStay = { confirmSkip = false })
+}
+
+@Composable
+private fun SkipDialog(onSkip: () -> Unit, onStay: () -> Unit) {
+    val c = Tokens.colors
+    Dialog(onDismissRequest = onStay) {
+        Panel {
+            Text("Skip setup?", style = HamsType.heading, color = c.text)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Hams won't type anything until its keyboard is on and chosen, the microphone is allowed and a speech pack is downloaded. Home keeps a checklist, so you can finish later.",
+                style = HamsType.body, color = c.muted,
+            )
+            Spacer(Modifier.height(20.dp))
+            PrimaryButton("Keep going", onStay, Modifier.fillMaxWidth())
+            Spacer(Modifier.height(4.dp))
+            QuietButton("Skip anyway", onSkip, Modifier.fillMaxWidth())
         }
     }
 }
@@ -191,11 +242,52 @@ private fun Page(
     }
 }
 
+/** "What do you speak?": the phone's languages are picked already; more from the full list. */
+@Composable
+private fun LanguagePage(model: AppModel, onNext: () -> Unit) {
+    val c = Tokens.colors
+    var picked by remember { mutableStateOf<List<String>>(emptyList()) }
+    var more by remember { mutableStateOf(false) }
+    LaunchedEffect(model.languages) {
+        if (picked.isEmpty() && model.languages.isNotEmpty()) {
+            picked = model.settings?.languages.orEmpty().ifEmpty { model.deviceLanguages().take(2).ifEmpty { listOf("en") } }
+        }
+    }
+    val shown = (picked + model.deviceLanguages() + POPULAR_LANGUAGES).distinct().take(maxOf(12, picked.size))
+    Page(
+        visual = {
+            FlowRow(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                shown.forEach { code ->
+                    val on = code in picked
+                    Chip(model.lang(code)?.native ?: code, { picked = if (on) picked - code else picked + code }, selected = on)
+                }
+            }
+        },
+        title = "What do you speak?",
+        body = "Pick every language you dictate in. Hams gets the speech pack that suits them, and writes in the one you use.",
+    ) {
+        PrimaryButton("Continue", {
+            model.saveLanguages(picked)
+            onNext()
+        }, Modifier.fillMaxWidth(), enabled = picked.isNotEmpty())
+        Spacer(Modifier.height(4.dp))
+        LinkButton("More languages", { more = true }, color = c.muted)
+    }
+    if (more) {
+        AddLanguageSheet(model, picked, onPick = { picked = picked + it; more = false }, onDismiss = { more = false })
+    }
+}
+
 @Composable
 private fun ModelPage(model: AppModel) {
     val c = Tokens.colors
     val chosen = model.settings?.model
     val progress = chosen?.let { model.downloads[it] }
+    val failure = chosen?.let { model.downloadFailures[it] }
     val info = model.models.firstOrNull { it.id == chosen }
     Page(
         visual = {
@@ -209,14 +301,23 @@ private fun ModelPage(model: AppModel) {
                 Orb(if (progress != null) OrbMood.Working else OrbMood.Idle, 0f, diameter = 220.dp)
             }
         },
-        title = "Get the speech model",
+        title = "Get your speech pack",
         body = (info?.let { "${it.label}, ${it.sizeMb} MB, downloaded once. " } ?: "Downloaded once. ") +
             "After that, everything runs on this phone, even offline.",
     ) {
         if (progress != null) {
             Text("Downloading… ${(progress * 100).toInt()}%", style = HamsType.section, color = c.text)
+            Spacer(Modifier.height(4.dp))
+            Text("You can leave this screen. It keeps going.", style = HamsType.small, color = c.muted)
         } else if (chosen != null) {
-            PrimaryButton("Download", { model.download(chosen) }, Modifier.fillMaxWidth())
+            if (failure != null) {
+                // Stays until tried again, unlike a toast: someone away from the screen would miss it.
+                Text("The download stopped: $failure", style = HamsType.body, color = c.negative, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(4.dp))
+                Text("Hams carries on from where it stopped.", style = HamsType.small, color = c.muted, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(12.dp))
+            }
+            PrimaryButton(if (failure != null) "Try again" else "Download", { model.download(chosen) }, Modifier.fillMaxWidth())
         }
     }
 }
@@ -226,15 +327,17 @@ private fun TryPage(model: AppModel, onDone: () -> Unit) {
     val c = Tokens.colors
     val status by Hams.status.collectAsState()
     val level by Hams.level.collectAsState()
-    val tried by TryField.text.collectAsState()
     val ready = model.setup.micAllowed && model.setup.modelReady
-    // The newest history item, once something was dictated on this page.
-    val last = model.recent.firstOrNull()?.takeIf { tried.isNotBlank() }
+    // A dictation counts once it's newer than this page (or than the last "Try again"),
+    // whichever way it was made: the orb here, or the keyboard in the field below.
+    var since by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var typed by remember { mutableStateOf("") }
+    val last = model.recent.firstOrNull { it.createdAt >= since }
 
     Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-            Box(Modifier.size(240.dp).holdToTalk(ready), contentAlignment = Alignment.Center) {
-                Orb(orbMood(status.phase, ready), level, diameter = 240.dp)
+            Box(Modifier.size(200.dp).holdToTalk(ready), contentAlignment = Alignment.Center) {
+                Orb(orbMood(status.phase, ready), level, diameter = 200.dp)
             }
         }
         Text(if (last == null) "Now say something" else "That's Hams.", style = HamsType.display, color = c.text, textAlign = TextAlign.Center)
@@ -250,12 +353,20 @@ private fun TryPage(model: AppModel, onDone: () -> Unit) {
             Panel(modifier = Modifier.animateContentSize(), padding = PaddingValues(18.dp)) {
                 HeardWritten(last.raw, last.text, summary = true)
             }
+        } else if (ready && model.setup.keyboardSelected) {
+            // The real thing: the same keyboard, in a field, as in any other app.
+            Spacer(Modifier.height(16.dp))
+            Field(typed, { typed = it }, label = "", placeholder = "Or tap here and use the Hams keyboard")
         }
         Spacer(Modifier.height(24.dp))
         if (last != null) {
             PrimaryButton("Start using Hams", onDone, Modifier.fillMaxWidth())
             Spacer(Modifier.height(4.dp))
-            QuietButton("Try again", { TryField.clear() })
+            QuietButton("Try again", {
+                since = System.currentTimeMillis()
+                typed = ""
+                TryField.clear()
+            })
         } else {
             LinkButton("Skip for now", onDone, color = c.muted)
         }

@@ -144,6 +144,20 @@ pub fn request_accessibility() -> bool {
     true
 }
 
+/// Desktop apps get no per-app microphone prompt on Windows (a global privacy
+/// switch decides), so the status can't be read here.
+pub fn microphone_status() -> super::MicPermission {
+    super::MicPermission::Unknown
+}
+
+pub fn request_microphone() {}
+
+/// The low-level keyboard hook either runs or `start_hotkeys` failed (which
+/// `AppState::hotkey_error` reports), and it can always swallow keys.
+pub fn hotkey_mode() -> super::HotkeyMode {
+    super::HotkeyMode::Active
+}
+
 pub fn open_permission_settings(kind: &str) {
     let uri = if kind == "microphone" { "ms-settings:privacy-microphone" } else { "ms-settings:privacy" };
     let _ = std::process::Command::new("cmd").args(["/C", "start", "", uri]).spawn();

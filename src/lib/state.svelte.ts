@@ -1,5 +1,5 @@
 // One app-wide store, fed by Rust events. Components read it directly.
-import { api, errorText, on, type Settings, type SettingsView, type Status, type UpdateInfo, type UpdateProgress } from "./ipc";
+import { api, errorText, on, type Permissions, type Settings, type SettingsView, type Status, type UpdateInfo, type UpdateProgress } from "./ipc";
 
 const idle: Status = {
   phase: "idle",
@@ -13,7 +13,7 @@ const idle: Status = {
 };
 
 export type Route = "home" | "history" | "notes" | "dictionary" | "snippets" | "styles" | "settings";
-export type SettingsArea = "general" | "shortcuts" | "speech" | "output" | "ai" | "learning" | "updates" | "permissions";
+export type SettingsArea = "general" | "shortcuts" | "speech" | "output" | "ai" | "learning" | "updates" | "health";
 
 class AppStore {
   status = $state<Status>(idle);
@@ -30,7 +30,13 @@ class AppStore {
   update = $state<UpdateInfo | null>(null);
   /** Download progress while an update installs, 0..1 (null when the size is unknown). */
   updateProgress = $state<number | null | undefined>(undefined);
+  /** OS permissions and how the shortcut listener runs; kept fresh by `refreshPermissions`. */
+  permissions = $state.raw<Permissions | null>(null);
+  /** Accessibility is granted but the shortcut still won't start: only a relaunch helps. */
+  needsRestart = $state(false);
   #toastTimer: ReturnType<typeof setTimeout> | undefined;
+  #rearmTries = 0;
+  #rearming = false;
 
   get settings(): Settings | null {
     return this.view?.settings ?? null;
@@ -54,6 +60,53 @@ class AppStore {
       void this.refreshSuggestions();
     } catch (error) {
       this.notify(errorText(error), "error");
+    }
+    // People grant permissions in System Settings and come back: look again then.
+    void this.refreshPermissions();
+    window.addEventListener("focus", () => void this.refreshPermissions());
+  }
+
+  /**
+   * Read the OS permissions. If Accessibility is allowed but the shortcut
+   * listener is still the listen-only fallback (or off), start it again so the
+   * shortcut works without relaunching Hams. After three failed tries it asks
+   * for a relaunch instead of looping.
+   */
+  async refreshPermissions() {
+    try {
+      const p = await api.permissions();
+      this.permissions = p;
+      if (p.applicable && p.accessibility && p.hotkeys !== "active") {
+        await this.#rearmHotkeys();
+      } else {
+        this.#rearmTries = 0;
+        this.needsRestart = false;
+      }
+    } catch {
+      // Not fatal: the next check tries again.
+    }
+  }
+
+  async #rearmHotkeys() {
+    if (this.#rearming) return;
+    if (this.#rearmTries >= 3) {
+      this.needsRestart = true;
+      return;
+    }
+    this.#rearming = true;
+    this.#rearmTries++;
+    try {
+      const mode = await api.retryHotkeys();
+      this.permissions = await api.permissions();
+      if (mode === "active") {
+        this.#rearmTries = 0;
+        this.needsRestart = false;
+        await this.reloadSettings(); // clears the stale hotkey_error
+      }
+    } catch {
+      // Counted above; after three tries the UI offers a restart.
+    } finally {
+      this.#rearming = false;
     }
   }
 

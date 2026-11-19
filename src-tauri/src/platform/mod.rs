@@ -106,17 +106,58 @@ pub fn start_hotkeys(
     native::start_hotkeys(matcher, recording, actions)
 }
 
+/// How the global shortcut listener is running right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(specta::Type))]
+pub enum HotkeyMode {
+    /// No listener (it failed to start).
+    Off,
+    /// Sees the shortcut but can't swallow it, so the shortcut key also reaches
+    /// the focused app. macOS falls back to this without Accessibility.
+    ListenOnly,
+    Active,
+}
+
+/// Microphone permission as the OS reports it, without opening the mic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(specta::Type))]
+pub enum MicPermission {
+    Granted,
+    Denied,
+    /// macOS hasn't asked yet; the prompt appears on request.
+    Undetermined,
+    /// This OS doesn't tell us (Windows has a global privacy switch, not a prompt).
+    Unknown,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(test, derive(specta::Type))]
 pub struct Permissions {
     /// Needed for the global shortcut, paste, and reading selected text.
     pub accessibility: bool,
+    pub microphone: MicPermission,
+    pub hotkeys: HotkeyMode,
     /// Whether this OS has permission prompts at all.
     pub applicable: bool,
 }
 
 pub fn permissions() -> Permissions {
-    Permissions { accessibility: native::can_send_keys(), applicable: cfg!(target_os = "macos") }
+    Permissions {
+        accessibility: native::can_send_keys(),
+        microphone: native::microphone_status(),
+        hotkeys: native::hotkey_mode(),
+        applicable: cfg!(target_os = "macos"),
+    }
+}
+
+pub use native::hotkey_mode;
+
+/// Show the OS microphone prompt (macOS), so it appears in setup instead of
+/// during the first dictation. Returns immediately; poll `permissions()`.
+pub fn request_microphone() {
+    native::request_microphone()
 }
 
 /// Open the OS settings page for a permission ("accessibility" or "microphone").

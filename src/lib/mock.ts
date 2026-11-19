@@ -149,7 +149,7 @@ let snippets: Snippet[] = [
 
 const models: ModelStatus[] = [
   { id: "base", file: "ggml-base.bin", label: "Base", size_mb: 148, multilingual: true, note: "Fastest. Good for clear English.", mobile: false, installed: false },
-  { id: "small", file: "ggml-small.bin", label: "Small", size_mb: 488, multilingual: true, note: "Recommended balance. Handles Malayalam and mixed speech.", mobile: false, installed: true },
+  { id: "small", file: "ggml-small.bin", label: "Small", size_mb: 488, multilingual: true, note: "Recommended balance. Handles Malayalam and mixed speech.", mobile: false, installed: !location.search.includes("empty") },
   { id: "large-v3-turbo-q5", file: "ggml-large-v3-turbo-q5_0.bin", label: "Large v3 Turbo", size_mb: 574, multilingual: true, note: "Most accurate. Needs Apple Silicon or a fast CPU.", mobile: false, installed: false },
 ];
 
@@ -161,7 +161,11 @@ const styles: StyleInfo[] = [
   { id: "default", label: "Default", polish: true, prompt: "Clear, natural writing." },
 ];
 
-let view: SettingsView = { settings, has_api_key: true, platform: "macos", hotkey_error: null };
+let view: SettingsView = { settings, has_api_key: true, platform: "macos", hotkey_error: null, hotkey_mode: "active" };
+
+// Permissions start ungranted on a first run (`?empty`); the Allow buttons flip them.
+let access = !location.search.includes("empty");
+let mic: "granted" | "denied" | "undetermined" = location.search.includes("empty") ? "undetermined" : "granted";
 
 export function mockCall(command: string, args: Record<string, unknown> = {}): unknown {
   switch (command) {
@@ -200,10 +204,17 @@ export function mockCall(command: string, args: Record<string, unknown> = {}): u
     case "snippet_upsert": snippets = [...snippets, { id: Date.now(), trigger: String(args.trigger), expansion: String(args.expansion) }]; return;
     case "list_models": return models;
     case "list_microphones": return ["MacBook Pro Microphone", "AirPods Pro"];
-    case "permissions": return { accessibility: !location.search.includes("empty"), applicable: true };
+    case "permissions": return { accessibility: access, microphone: mic, hotkeys: access ? "active" : "listen_only", applicable: true };
+    case "request_accessibility": access = true; return true;
+    case "request_microphone": mic = "granted"; return;
+    case "download_model": return new Promise<void>((done) => setTimeout(() => { const m = models.find((x) => x.id === args.id); if (m) m.installed = true; done(); }, 800));
+    case "cancel_model_download": return;
+    case "diagnostic_report": return "Hams 0.2.0 on macos (aarch64)\nSpeech model: small (downloaded: yes)\nShortcut listener: Active";
+    case "retry_hotkeys": return access ? "active" : "listen_only";
     case "styles": return styles;
     case "recent_apps": return ["Slack", "Mail", "Cursor", "Notion", "Linear", "Messages", "Safari"];
     case "default_ai_model": return "gemini-3.1-flash-lite";
+    case "ollama_models": return ["llama3.2:latest", "qwen2.5:7b"];
     case "autostart_enabled": return true;
     case "app_version": return "0.2.0";
     case "update_check": return { version: "0.3.0", current_version: "0.2.0", notes: "Rewrite past dictations in another style." };

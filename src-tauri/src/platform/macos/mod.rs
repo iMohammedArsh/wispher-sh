@@ -3,6 +3,7 @@
 #![allow(unused_unsafe, non_upper_case_globals)]
 
 mod hotkeys;
+mod microphone;
 
 use std::ffi::c_void;
 use std::time::{Duration, Instant};
@@ -15,7 +16,8 @@ use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication, NSWorkspace};
 
-pub use hotkeys::start_hotkeys;
+pub use hotkeys::{hotkey_mode, start_hotkeys};
+pub use microphone::{microphone_status, request_microphone};
 
 use super::AppTarget;
 use crate::error::{AppError, AppResult};

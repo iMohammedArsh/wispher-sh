@@ -848,7 +848,15 @@ async fn process(deps: &Deps, job: Job) {
         Err(_) => "failed",
     };
     match delivered {
-        Ok(_) => deps.ui.status(&Status { text: Some(final_text.clone()), message: notice, ..status(Phase::Done) }),
+        Ok(how) => {
+            // A command edits the selection. Copy-only delivery (the setting, or dictating into Hams
+            // itself) can't replace it, so say where the edit went instead of looking like it worked.
+            let message = notice.or_else(|| {
+                (job.kind == Kind::Command && how == Delivered::Copied)
+                    .then(|| "Copied. Paste it over your selection to apply the edit.".to_string())
+            });
+            deps.ui.status(&Status { text: Some(final_text.clone()), message, ..status(Phase::Done) })
+        }
         Err(error) => deps.ui.status(&Status {
             text: Some(final_text.clone()),
             message: Some(format!("{error} It's saved in History.")),
@@ -941,20 +949,29 @@ mod tests {
         delivered: Mutex<Vec<(String, DeliveryMode)>>,
         /// Successive reads of the focused field; the last one repeats.
         fields: Mutex<std::collections::VecDeque<String>>,
+        /// Nothing is selected in the target app.
+        no_selection: AtomicBool,
+        /// The app in front, as (bundle id, name); TextEdit when unset.
+        app: Mutex<Option<(String, String)>>,
+        /// Whether each selected-text read was allowed to use the copy probe.
+        copy_probe: Mutex<Vec<bool>>,
     }
     impl Desktop for FakeDesktop {
         fn frontmost(&self) -> Option<AppTarget> {
-            Some(AppTarget { pid: 42, id: "com.apple.TextEdit".into(), name: "TextEdit".into(), window: 0 })
+            let (id, name) = self.app.lock().clone().unwrap_or(("com.apple.TextEdit".into(), "TextEdit".into()));
+            Some(AppTarget { pid: 42, id, name, window: 0 })
         }
         fn deliver(&self, text: &str, _: Option<&AppTarget>, mode: DeliveryMode) -> AppResult<Delivered> {
             self.delivered.lock().push((text.to_string(), mode));
-            Ok(Delivered::Pasted)
+            // Like the real desktop: copy-only puts it on the clipboard and pastes nothing.
+            Ok(if mode == DeliveryMode::CopyOnly { Delivered::Copied } else { Delivered::Pasted })
         }
         fn copy(&self, _: &str) -> AppResult<()> {
             Ok(())
         }
-        fn selected_text(&self, _: Option<&AppTarget>, _: bool) -> Option<String> {
-            Some("hello there".into())
+        fn selected_text(&self, _: Option<&AppTarget>, allow_copy_fallback: bool) -> Option<String> {
+            self.copy_probe.lock().push(allow_copy_fallback);
+            (!self.no_selection.load(Ordering::SeqCst)).then(|| "hello there".to_string())
         }
         fn field_text(&self, _: &AppTarget) -> Option<String> {
             let mut fields = self.fields.lock();
@@ -1333,6 +1350,75 @@ mod tests {
         let last = h.ui.statuses.lock().last().cloned().unwrap();
         assert_eq!(last.phase, Phase::Error);
         assert!(last.message.unwrap().contains("AI provider"));
+    }
+
+    async fn run_command(h: &Harness) {
+        h.send(Input::Hotkey(HotkeyAction::Pressed(Binding::Command)));
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        h.send(Input::Hotkey(HotkeyAction::Released(Binding::Command)));
+        settle().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_command_with_copy_only_delivery_says_the_edit_was_only_copied() {
+        let h = harness("make it formal", Some(Ok("EDITED".into())));
+        h.settings.save(Settings { delivery: DeliveryMode::CopyOnly, ..Settings::default() }).unwrap();
+        run_command(&h).await;
+        assert_eq!(h.desktop.delivered.lock().as_slice(), [("EDITED|hello there".to_string(), DeliveryMode::CopyOnly)]);
+        let done = h.ui.statuses.lock().iter().rev().find(|s| s.phase == Phase::Done).cloned().unwrap();
+        assert!(done.message.unwrap().contains("Paste it over your selection"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_command_that_pasted_needs_no_explanation() {
+        let h = harness("make it formal", Some(Ok("EDITED".into())));
+        run_command(&h).await;
+        let done = h.ui.statuses.lock().iter().rev().find(|s| s.phase == Phase::Done).cloned().unwrap();
+        assert_eq!(done.message, None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn plain_dictation_that_was_copied_keeps_its_own_message() {
+        // Only commands get the "paste it over your selection" hint.
+        let h = harness("hello world", Some(Ok("Hello world.".into())));
+        h.settings.save(Settings { delivery: DeliveryMode::CopyOnly, ..Settings::default() }).unwrap();
+        h.press();
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        h.release();
+        settle().await;
+        let done = h.ui.statuses.lock().iter().rev().find(|s| s.phase == Phase::Done).cloned().unwrap();
+        assert_eq!(done.message, None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_command_with_nothing_selected_writes_fresh_text() {
+        let h = harness("write a haiku", Some(Ok("EDITED".into())));
+        h.desktop.no_selection.store(true, Ordering::SeqCst);
+        run_command(&h).await;
+        assert_eq!(h.delivered(), vec!["EDITED|".to_string()]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_command_in_a_code_editor_never_uses_the_copy_probe() {
+        // Editors copy the whole line when nothing is selected, so the probe would edit the wrong text.
+        let h = harness("make it shorter", Some(Ok("EDITED".into())));
+        *h.desktop.app.lock() = Some(("com.microsoft.VSCode".into(), "Code".into()));
+        run_command(&h).await;
+        assert_eq!(h.desktop.copy_probe.lock().as_slice(), [false]);
+
+        let other = harness("make it shorter", Some(Ok("EDITED".into())));
+        run_command(&other).await;
+        assert_eq!(other.desktop.copy_probe.lock().as_slice(), [true]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_command_whose_ai_call_fails_reports_it_and_pastes_nothing() {
+        let h = harness("make it formal", Some(Err(AppError::Polish("offline".into()))));
+        run_command(&h).await;
+        assert!(h.delivered().is_empty(), "a failed edit must never replace the selection with something else");
+        let last = h.ui.statuses.lock().last().cloned().unwrap();
+        assert_eq!(last.phase, Phase::Error);
+        assert!(last.message.unwrap().contains("offline"));
     }
 
     #[tokio::test(start_paused = true)]

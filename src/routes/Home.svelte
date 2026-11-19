@@ -1,7 +1,7 @@
 <script lang="ts">
   // Home answers one question: did my last dictation come out right?
   // The biggest block is that dictation as Heard / Written, with its fixes one click away.
-  import { api, type HistoryItem, type ModelStatus, type Permissions, type Stats } from "../lib/ipc";
+  import { api, type HistoryItem, type ModelStatus, type Stats } from "../lib/ipc";
   import { app } from "../lib/state.svelte";
   import { clockTime, duration, groupedNumber, lastDays, niceCeiling, shortcutLabel, shortWhen } from "../lib/format";
   import Icon from "../components/Icon.svelte";
@@ -11,7 +11,6 @@
 
   let stats = $state.raw<Stats | null>(null);
   let recent = $state.raw<HistoryItem[]>([]);
-  let permissions = $state.raw<Permissions | null>(null);
   let models = $state.raw<ModelStatus[]>([]);
   let loaded = $state(false);
   let rewriting = $state(false);
@@ -25,7 +24,6 @@
   });
 
   $effect(() => {
-    api.permissions().then((p) => (permissions = p)).catch(() => {});
     api.models().then((m) => (models = m)).catch(() => {});
     const timer = setInterval(() => (now = Date.now()), 500);
     return () => clearInterval(timer);
@@ -39,7 +37,10 @@
   const elapsed = $derived(recording && app.status.started_at ? duration(now - app.status.started_at) : "");
 
   const modelReady = $derived(models.length === 0 || models.some((m) => m.id === settings?.model && m.installed));
+  const permissions = $derived(app.permissions);
   const accessOk = $derived(!permissions?.applicable || permissions.accessibility);
+  const micDenied = $derived(permissions?.applicable === true && permissions.microphone === "denied");
+  const micOk = $derived(!permissions?.applicable || permissions.microphone === "granted" || permissions.microphone === "unknown");
   const last = $derived(recent[0]);
   const earlier = $derived(recent.slice(1, 6));
 
@@ -59,6 +60,7 @@
   // First run: the steps between installing Hams and the first dictation.
   const steps = $derived([
     { done: accessOk, label: "Allow Accessibility", detail: "So Hams can hear its shortcut and paste for you.", action: "Grant access", run: recheckPermissions },
+    { done: micOk, label: "Allow the microphone", detail: micDenied ? "It's off for Hams. Turn it on in System Settings." : "Hams only listens while you hold the shortcut.", action: micDenied ? "Open System Settings" : "Allow", run: allowMicrophone },
     { done: modelReady, label: "Download the speech model", detail: "Speech is recognised on this computer.", action: "Open Speech settings", run: () => app.openSettings("speech") },
     { done: false, label: "Make your first dictation", detail: settings ? `Hold ${key(settings.dictate_shortcut)} in any app, speak, and let go.` : "", action: "", run: () => {} },
   ]);
@@ -66,7 +68,13 @@
 
   async function recheckPermissions() {
     await api.requestAccessibility().catch(() => {});
-    setTimeout(async () => (permissions = await api.permissions()), 1500);
+    setTimeout(() => void app.refreshPermissions(), 1500);
+  }
+
+  async function allowMicrophone() {
+    if (micDenied) return api.openPermissionSettings("microphone");
+    await api.requestMicrophone().catch(() => {});
+    setTimeout(() => void app.refreshPermissions(), 1500);
   }
 </script>
 
@@ -81,7 +89,12 @@
     {/if}
   </header>
 
-  {#if app.view?.hotkey_error}
+  {#if app.needsRestart}
+    <div class="notice bad">
+      <span class="grow">macOS hasn't applied the Accessibility permission to the running Hams yet, so the shortcut isn't working. Restarting fixes it.</span>
+      <button onclick={() => api.restartApp()}>Restart Hams</button>
+    </div>
+  {:else if app.view?.hotkey_error}
     <div class="notice bad">
       <span class="grow">{app.view.hotkey_error}</span>
       <button onclick={() => api.openPermissionSettings("accessibility")}>Open System Settings</button>
@@ -90,6 +103,12 @@
     <div class="notice">
       <span class="grow">Hams needs Accessibility access again to hear its shortcut and paste for you.</span>
       <button onclick={recheckPermissions}>Grant access</button>
+    </div>
+  {/if}
+  {#if last && micDenied}
+    <div class="notice">
+      <span class="grow">The microphone is off for Hams, so dictation can't hear you.</span>
+      <button onclick={() => api.openPermissionSettings("microphone")}>Open System Settings</button>
     </div>
   {/if}
   {#if last && !modelReady}

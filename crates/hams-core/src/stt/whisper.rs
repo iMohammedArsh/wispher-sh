@@ -85,6 +85,11 @@ fn is_auto(language: &str) -> bool {
     language.is_empty() || language == "auto"
 }
 
+/// English-only models (`*.en`) can't detect or write other languages.
+fn english_only(model: &str) -> bool {
+    models::info(model).is_some_and(|m| !m.multilingual)
+}
+
 impl Transcriber for WhisperEngine {
     fn transcribe(&self, samples: &[f32], request: &SttRequest) -> AppResult<String> {
         let mut slot = self.loaded.lock();
@@ -104,7 +109,9 @@ impl Transcriber for WhisperEngine {
         params.set_temperature(0.0);
         // With a list of allowed languages, detect here and narrow the guess to
         // that list; otherwise let Whisper detect on its own.
-        let language = if !is_auto(&request.language) {
+        let language = if english_only(&request.model) {
+            "en".into()
+        } else if !is_auto(&request.language) {
             request.language.clone()
         } else if request.languages.iter().any(|l| !is_auto(l)) {
             detect_language(loaded, samples, &request.languages)
@@ -145,6 +152,9 @@ impl Transcriber for WhisperEngine {
     }
 
     fn resolve_language(&self, samples: &[f32], request: &SttRequest) -> String {
+        if english_only(&request.model) {
+            return "en".into();
+        }
         if !is_auto(&request.language) {
             return request.language.clone();
         }

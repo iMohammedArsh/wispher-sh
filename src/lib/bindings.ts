@@ -82,9 +82,26 @@ export type HistoryItem = {
 	pinned: boolean,
 };
 
+/**  How the global shortcut listener is running right now. */
+export type HotkeyMode = 
+/**  No listener (it failed to start). */
+"off" | 
+/**
+ *  Sees the shortcut but can't swallow it, so the shortcut key also reaches
+ *  the focused app. macOS falls back to this without Accessibility.
+ */
+"listen_only" | "active";
+
 export type Kind = "dictate" | "command" | 
 /**  A long voice note: transcribed in chunks, summarised, saved to Notes, never pasted. */
 "note";
+
+/**  Microphone permission as the OS reports it, without opening the mic. */
+export type MicPermission = "granted" | "denied" | 
+/**  macOS hasn't asked yet; the prompt appears on request. */
+"undetermined" | 
+/**  This OS doesn't tell us (Windows has a global privacy switch, not a prompt). */
+"unknown";
 
 export type ModelInfo = {
 	id: string,
@@ -120,6 +137,8 @@ export type Note = {
 export type Permissions = {
 	/**  Needed for the global shortcut, paste, and reading selected text. */
 	accessibility: boolean,
+	microphone: MicPermission,
+	hotkeys: HotkeyMode,
 	/**  Whether this OS has permission prompts at all. */
 	applicable: boolean,
 };
@@ -142,6 +161,7 @@ export type SettingsView_Deserialize = {
 	has_api_key: boolean,
 	platform: Platform,
 	hotkey_error?: string | null,
+	hotkey_mode: HotkeyMode,
 };
 
 export type SettingsView_Serialize = {
@@ -149,6 +169,7 @@ export type SettingsView_Serialize = {
 	has_api_key: boolean,
 	platform: Platform,
 	hotkey_error: string | null,
+	hotkey_mode: HotkeyMode,
 };
 
 export type Settings_Deserialize = {

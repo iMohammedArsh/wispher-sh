@@ -1,9 +1,12 @@
+use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+use tokio::sync::mpsc::UnboundedSender;
 
 use crate::controller::Controller;
-use crate::input::{Binding, Matcher, Shortcut};
+use crate::input::{Binding, HotkeyAction, Matcher, Shortcut};
 use crate::llm::{LlmClient, Polisher};
 use crate::settings::{SecretCache, Settings, SettingsStore};
 use crate::store::Store;
@@ -18,6 +21,12 @@ pub struct AppState {
     pub ui: Arc<TauriUi>,
     pub matcher: Arc<Mutex<Matcher>>,
     pub hotkey_error: Mutex<Option<String>>,
+    /// Kept so `retry_hotkeys` can start the listener again after the user
+    /// grants Accessibility, without restarting the app.
+    pub recording: Arc<AtomicBool>,
+    pub hotkey_tx: UnboundedSender<HotkeyAction>,
+    /// Model downloads in progress, by model id, with the flag that cancels each.
+    pub downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub stt: Arc<dyn Transcriber>,
     pub secrets: Arc<SecretCache>,
 }

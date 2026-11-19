@@ -118,6 +118,14 @@ fun HomeScreen(model: AppModel, requestMic: ((Boolean) -> Unit) -> Unit, openSet
         }
 
         if (!searching) {
+            if (!model.setup.complete) {
+                item {
+                    Column {
+                        SectionTitle("Finish setup · ${4 - model.setup.missing} of 4")
+                        SetupChecklist(model, requestMic, openSettings)
+                    }
+                }
+            }
             item { Hero(model, requestMic, openSettings) }
             if (list.isNotEmpty()) item { SectionTitle("Recent") }
         }

@@ -31,7 +31,16 @@ data class ModelStatus(
     val multilingual: Boolean,
     val note: String,
     val installed: Boolean,
+    /** The pack that suits the user's languages. */
+    val recommended: Boolean = false,
 )
+
+/** A language Whisper can write: its code, English name and own name. */
+data class Lang(val code: String, val name: String, val native: String) {
+    /** "മലയാളം" for Malayalam, just "English" when both names are the same. */
+    val title get() = native
+    val subtitle get() = if (native == name) null else name
+}
 
 data class StyleInfo(val id: String, val label: String, val prompt: String, val polish: Boolean)
 
@@ -81,8 +90,12 @@ object Parse {
     fun models(json: String): List<ModelStatus> = JSONArray(json).map {
         ModelStatus(
             it.getString("id"), it.getString("label"), it.optInt("size_mb"), it.optBoolean("multilingual"),
-            it.optString("note"), it.optBoolean("installed"),
+            it.optString("note"), it.optBoolean("installed"), it.optBoolean("recommended"),
         )
+    }
+
+    fun languages(json: String): List<Lang> = JSONArray(json).map {
+        Lang(it.getString("code"), it.getString("name"), it.optString("native", it.getString("name")))
     }
 
     fun styles(json: String): List<StyleInfo> = JSONArray(json).map {
@@ -166,10 +179,23 @@ val AI_PROVIDERS = listOf(
     Triple("custom", "Other OpenAI-compatible", true),
 )
 
-/** Whisper languages people pick most, as (code, name). "auto" detects. */
-val LANGUAGES = listOf(
-    "auto" to "Detect automatically", "en" to "English", "ml" to "Malayalam", "hi" to "Hindi",
-    "ta" to "Tamil", "ar" to "Arabic", "ur" to "Urdu", "bn" to "Bengali", "te" to "Telugu", "kn" to "Kannada",
-    "mr" to "Marathi", "es" to "Spanish", "fr" to "French", "de" to "German", "pt" to "Portuguese",
-    "id" to "Indonesian", "ms" to "Malay", "tr" to "Turkish", "ru" to "Russian", "zh" to "Chinese", "ja" to "Japanese",
-)
+/**
+ * Whisper language codes for the phone's languages (Settings → Languages),
+ * most preferred first. Android tags are BCP 47; a few old ISO codes differ
+ * from Whisper's.
+ */
+fun whisperCodes(localeLanguages: List<String>, known: Set<String>): List<String> =
+    localeLanguages.map { tag ->
+        when (val base = tag.substringBefore('-').substringBefore('_').lowercase()) {
+            "iw" -> "he"
+            "in" -> "id"
+            "ji" -> "yi"
+            "nb" -> "no"
+            "fil" -> "tl"
+            "jv" -> "jw"
+            else -> base
+        }
+    }.filter { it in known }.distinct()
+
+/** Languages most Hams users speak, suggested after the phone's own. */
+val POPULAR_LANGUAGES = listOf("en", "hi", "ml", "ar", "ta", "ur", "bn", "es", "fr", "id", "ms", "pt", "de", "zh")
