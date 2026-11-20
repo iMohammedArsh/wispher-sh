@@ -18,4 +18,7 @@ pub struct Captured {
     /// Length of the raw recording.
     pub duration_ms: u64,
     pub has_speech: bool,
+    /// The speech was whispered or far from the microphone (very low level).
+    /// `prepare` already compensated; the decoder can be more forgiving too.
+    pub quiet: bool,
 }

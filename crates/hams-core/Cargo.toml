@@ -24,6 +24,7 @@ tracing = "0.1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 dirs = "7"
 rubato = "0.16"
+realfft = "3"
 regex = "1"
 whisper-rs = { version = "0.15", optional = true }
 specta = { version = "=2.0.0-rc.28", features = ["derive"], optional = true }

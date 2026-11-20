@@ -90,6 +90,18 @@ fn english_only(model: &str) -> bool {
     models::info(model).is_some_and(|m| !m.multilingual)
 }
 
+/// Segments Whisper thinks are probably not speech are dropped above this
+/// probability.
+const NO_SPEECH_LIMIT: f32 = 0.8;
+/// For a whisper or a far-away voice. Whisper often scores that kind of speech as
+/// "no speech" even when it has transcribed it correctly, so the bar is higher.
+/// The stock-phrase filter below still catches the hallucinations this lets in.
+const NO_SPEECH_LIMIT_QUIET: f32 = 0.95;
+
+fn no_speech_limit(quiet: bool) -> f32 {
+    if quiet { NO_SPEECH_LIMIT_QUIET } else { NO_SPEECH_LIMIT }
+}
+
 impl Transcriber for WhisperEngine {
     fn transcribe(&self, samples: &[f32], request: &SttRequest) -> AppResult<String> {
         let mut slot = self.loaded.lock();
@@ -131,7 +143,7 @@ impl Transcriber for WhisperEngine {
             .map_err(|e| AppError::Transcription(format!("Whisper failed: {e}")))?;
         let mut text = String::new();
         for segment in loaded.state.as_iter() {
-            if segment.no_speech_probability() > 0.8 {
+            if segment.no_speech_probability() > no_speech_limit(request.quiet) {
                 continue;
             }
             if let Ok(words) = segment.to_str_lossy() {
@@ -296,5 +308,195 @@ mod tests {
         println!("{} chunks, {} vs {} words, overlap {:.0}%", chunks.len(), a.len(), b.len(), overlap * 100.0);
         assert!(chunks.len() >= 2, "expected the recording to be split");
         assert!(overlap > 0.97, "chunked transcript drifted from the single pass");
+    }
+
+    // ---- Quiet-speech benchmark ------------------------------------------
+
+    /// Word error rate: word-level Levenshtein distance over the reference length.
+    fn wer(reference: &str, hypothesis: &str) -> f32 {
+        let words = |t: &str| -> Vec<String> {
+            t.split_whitespace()
+                .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
+                .filter(|w| !w.is_empty())
+                .collect()
+        };
+        let (r, h) = (words(reference), words(hypothesis));
+        if r.is_empty() {
+            return if h.is_empty() { 0.0 } else { 1.0 };
+        }
+        let mut row: Vec<usize> = (0..=h.len()).collect();
+        for (i, rw) in r.iter().enumerate() {
+            let mut diagonal = row[0];
+            row[0] = i + 1;
+            for (j, hw) in h.iter().enumerate() {
+                let above = row[j + 1];
+                row[j + 1] = (diagonal + usize::from(rw != hw)).min(row[j] + 1).min(above + 1);
+                diagonal = above;
+            }
+        }
+        row[h.len()] as f32 / r.len() as f32
+    }
+
+    #[test]
+    fn a_quiet_recording_gets_a_more_forgiving_no_speech_limit() {
+        assert_eq!(no_speech_limit(false), 0.8);
+        assert!(no_speech_limit(true) > no_speech_limit(false));
+        assert!(no_speech_limit(true) < 1.0, "a limit of 1 would keep every segment");
+    }
+
+    #[test]
+    fn wer_counts_substitutions_insertions_and_deletions() {
+        assert_eq!(wer("the cat sat", "The cat sat."), 0.0);
+        assert!((wer("the cat sat", "the dog sat") - 1.0 / 3.0).abs() < 1e-6);
+        assert!((wer("the cat sat", "the cat") - 1.0 / 3.0).abs() < 1e-6);
+        assert!((wer("the cat", "the big cat") - 0.5).abs() < 1e-6);
+        assert_eq!(wer("hello", ""), 1.0);
+    }
+
+    /// Small deterministic noise source (xorshift) so every run sees the same room.
+    struct Noise(u32);
+    impl Noise {
+        fn white(&mut self) -> f32 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 17;
+            self.0 ^= self.0 << 5;
+            self.0 as f32 / u32::MAX as f32 * 2.0 - 1.0
+        }
+    }
+
+    /// Add `kind` noise at `dbfs` (RMS) across the whole clip.
+    /// `fan` is low-passed (rumbly, like HVAC); `office` is a band-limited hiss
+    /// with a slow wobble, a rough stand-in for distant chatter.
+    fn add_room(samples: &mut [f32], kind: &str, dbfs: f32, rate: u32) {
+        if kind == "silent" {
+            return;
+        }
+        let gain = 10f32.powf(dbfs / 20.0) * 3f32.sqrt(); // white is uniform: RMS = peak / sqrt(3)
+        let mut noise = Noise(0x9E37_79B9);
+        let mut low = 0.0f32;
+        for (i, sample) in samples.iter_mut().enumerate() {
+            let white = noise.white();
+            let shaped = match kind {
+                "fan" => {
+                    low += 0.02 * (white - low);
+                    low * 6.0
+                }
+                _ => {
+                    let wobble = 0.6 + 0.4 * (i as f32 / rate as f32 * 2.0 * std::f32::consts::PI * 3.0).sin();
+                    white * wobble
+                }
+            };
+            *sample += shaped * gain;
+        }
+    }
+
+    /// Whisper in a noisy room: each clip at several levels and rooms through
+    /// `dsp::prepare` and Whisper. Prints a table and writes a CSV so a before/after
+    /// run can be compared. Make clips with `scripts/make-quiet-fixtures.sh`.
+    ///   HAMS_BENCH=1 [HAMS_BENCH_DIR=/tmp/hams-bench] [HAMS_TEST_MODEL=small] \
+    ///   cargo test -p hams-core --release quiet_speech_bench -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn quiet_speech_bench() {
+        use crate::audio::dsp;
+        std::env::var("HAMS_BENCH").expect("set HAMS_BENCH=1");
+        let dir = std::env::var("HAMS_BENCH_DIR").unwrap_or_else(|_| "/tmp/hams-bench".into());
+        let model = std::env::var("HAMS_TEST_MODEL").unwrap_or_else(|_| "small".into());
+        // HAMS_BENCH_VERBOSE=1 prints what Whisper heard for every clip that went wrong.
+        let verbose = std::env::var("HAMS_BENCH_VERBOSE").is_ok();
+        let mut clips: Vec<(String, Vec<f32>, u32, String)> = Vec::new();
+        for entry in std::fs::read_dir(&dir).expect("HAMS_BENCH_DIR: run scripts/make-quiet-fixtures.sh first") {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "wav") {
+                let reference = std::fs::read_to_string(path.with_extension("txt")).expect("a .txt next to every .wav");
+                let (samples, rate) = read_wav(path.to_str().unwrap());
+                let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+                clips.push((stem, samples, rate, reference));
+            }
+        }
+        clips.sort_by(|a, b| a.0.cmp(&b.0));
+        assert!(!clips.is_empty(), "no .wav files in {dir}");
+        if verbose {
+            // How loud each clip is on its own: the 90th percentile of 30 ms frame levels.
+            for (name, raw, rate, _) in &clips {
+                let mut levels: Vec<f32> = raw
+                    .chunks(*rate as usize * 30 / 1000)
+                    .map(|f| 10.0 * (f.iter().map(|s| s * s).sum::<f32>() / f.len() as f32).max(1e-12).log10())
+                    .collect();
+                levels.sort_by(|a, b| a.total_cmp(b));
+                println!("  level {name}: {:.1} dBFS", levels[levels.len() * 9 / 10]);
+            }
+        }
+
+        let engine = WhisperEngine::new();
+        let request = SttRequest { language: "en".into(), model: model.clone(), ..SttRequest::default() };
+        engine.transcribe(&vec![0.0; 16_000], &request).ok(); // warm-up
+
+        // The voice kind is the clip's name up to the dash ("whisper-3" -> "whisper").
+        // Rows: voice × attenuation × room.
+        let mut rows: std::collections::BTreeMap<(String, i32, &str), (usize, usize, f32, u128)> = Default::default();
+        for (name, raw, rate, reference) in &clips {
+            let voice = name.split('-').next().unwrap_or(name).to_string();
+            for attenuation in [0, -20, -30, -40] {
+                for room in ["silent", "fan", "office"] {
+                    let gain = 10f32.powf(attenuation as f32 / 20.0);
+                    let mut audio: Vec<f32> = raw.iter().map(|s| s * gain).collect();
+                    // Lead-in and tail so the room is heard on its own, like a real recording.
+                    let pad = vec![0.0; *rate as usize];
+                    audio.splice(0..0, pad.iter().copied());
+                    audio.extend_from_slice(&pad);
+                    add_room(&mut audio, room, if room == "fan" { -65.0 } else { -55.0 }, *rate);
+
+                    let started = std::time::Instant::now();
+                    let captured = dsp::prepare(&audio, *rate);
+                    let (heard, error) = if captured.has_speech {
+                        let clip_request = SttRequest { quiet: captured.quiet, ..request.clone() };
+                        let text = engine.transcribe(&captured.samples, &clip_request).unwrap_or_default();
+                        let error = wer(reference, &text);
+                        if verbose && error > 0.2 {
+                            println!(
+                                "  [{name} {attenuation} dB {room}] quiet={} {:.1}s of {:.1}s WER {:.0}% → {text:?}",
+                                captured.quiet,
+                                captured.samples.len() as f32 / 16_000.0,
+                                audio.len() as f32 / *rate as f32,
+                                error * 100.0
+                            );
+                        }
+                        (1, error)
+                    } else {
+                        if verbose {
+                            println!("  [{name} {attenuation} dB {room}] no speech found");
+                        }
+                        (0, 1.0)
+                    };
+                    let entry = rows.entry((voice.clone(), attenuation, room)).or_default();
+                    entry.0 += 1;
+                    entry.1 += heard;
+                    entry.2 += error;
+                    entry.3 += started.elapsed().as_millis();
+                }
+            }
+        }
+
+        let mut csv = String::from("model,voice,attenuation_db,room,clips,has_speech_rate,wer,avg_ms\n");
+        println!("\nmodel {model}\n{:<8} {:>5} {:<7} {:>7} {:>7} {:>7}", "voice", "dB", "room", "heard", "WER", "ms");
+        for ((voice, attenuation, room), (count, heard, error, millis)) in &rows {
+            let n = *count as f32;
+            println!(
+                "{voice:<8} {attenuation:>5} {room:<7} {:>6.0}% {:>6.0}% {:>7}",
+                *heard as f32 / n * 100.0,
+                error / n * 100.0,
+                millis / *count as u128
+            );
+            csv.push_str(&format!(
+                "{model},{voice},{attenuation},{room},{count},{:.2},{:.3},{}\n",
+                *heard as f32 / n,
+                error / n,
+                millis / *count as u128
+            ));
+        }
+        let out = std::env::var("HAMS_BENCH_CSV").unwrap_or_else(|_| format!("{dir}/results-{model}.csv"));
+        std::fs::write(&out, csv).expect("write csv");
+        println!("\nCSV: {out}");
     }
 }

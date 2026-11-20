@@ -1929,6 +1929,7 @@ dependencies = [
  "dirs 7.0.0",
  "futures-util",
  "parking_lot",
+ "realfft",
  "regex",
  "reqwest 0.12.28",
  "rubato",

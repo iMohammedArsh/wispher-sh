@@ -469,6 +469,7 @@ fn spawn_preview(deps: &Deps, settings: &Settings) -> JoinHandle<()> {
             let (recorder, stt, request) = (Arc::clone(&recorder), Arc::clone(&stt), request.clone());
             let heard = tokio::task::spawn_blocking(move || {
                 let captured = recorder.snapshot().filter(|c| c.has_speech)?;
+                let request = SttRequest { quiet: captured.quiet, ..request };
                 stt.transcribe(&captured.samples, &request).ok()
             })
             .await
@@ -508,7 +509,7 @@ fn spawn_note_chunks(deps: &Deps, settings: &Settings) -> NoteTask {
                 if !captured.has_speech {
                     return Some((None, Ok(String::new())));
                 }
-                let mut chunk_request = chunk_request;
+                let mut chunk_request = SttRequest { quiet: captured.quiet, ..chunk_request };
                 let language = lock.then(|| stt.resolve_language(&captured.samples, &chunk_request));
                 if let Some(language) = &language {
                     chunk_request.language = language.clone();
@@ -566,6 +567,7 @@ async fn process_note(deps: &Deps, job: Job, note: NoteTask) {
     let dictionary = deps.store.dictionary().unwrap_or_default();
     if rest.has_speech {
         let mut request = stt_request(&settings, &dictionary);
+        request.quiet = rest.quiet;
         if let Some(language) = language {
             request.language = language;
         }
@@ -666,6 +668,8 @@ fn stt_request(settings: &Settings, dictionary: &[store::DictionaryEntry]) -> St
         languages: settings.languages.clone(),
         model: settings.model.clone(),
         vocabulary: text::vocabulary(dictionary),
+        // Set per recording, from `Captured::quiet`.
+        quiet: false,
     }
 }
 
@@ -749,7 +753,8 @@ async fn process(deps: &Deps, job: Job) {
 
     let settings = deps.settings.get();
     let dictionary = deps.store.dictionary().unwrap_or_default();
-    let request = stt_request(&settings, &dictionary);
+    let mut request = stt_request(&settings, &dictionary);
+    request.quiet = captured.quiet;
     let stt = Arc::clone(&deps.stt);
     let samples = captured.samples;
     let raw = match blocking(move || stt.transcribe(&samples, &request)).await {
@@ -897,6 +902,8 @@ mod tests {
         starts: Mutex<u32>,
         cancels: Mutex<u32>,
         speech: Mutex<bool>,
+        /// Whether recordings count as whispered (`Captured::quiet`).
+        quiet: Mutex<bool>,
         /// Voice-note chunks still to hand out from `drain`.
         chunks: Mutex<u32>,
     }
@@ -906,7 +913,7 @@ mod tests {
             Ok(())
         }
         fn stop(&self) -> AppResult<Captured> {
-            Ok(Captured { samples: vec![0.0; 16_000], duration_ms: 1_500, has_speech: *self.speech.lock() })
+            Ok(Captured { samples: vec![0.0; 16_000], duration_ms: 1_500, has_speech: *self.speech.lock(), quiet: *self.quiet.lock() })
         }
         fn cancel(&self) {
             *self.cancels.lock() += 1;
@@ -915,13 +922,13 @@ mod tests {
             0.5
         }
         fn snapshot(&self) -> Option<Captured> {
-            Some(Captured { samples: vec![0.0; 16_000], duration_ms: 1_000, has_speech: *self.speech.lock() })
+            Some(Captured { samples: vec![0.0; 16_000], duration_ms: 1_000, has_speech: *self.speech.lock(), quiet: *self.quiet.lock() })
         }
         fn drain(&self, _: u32) -> Option<Captured> {
             let mut left = self.chunks.lock();
             (*left > 0).then(|| {
                 *left -= 1;
-                Captured { samples: vec![0.0; 16_000], duration_ms: 30_000, has_speech: true }
+                Captured { samples: vec![0.0; 16_000], duration_ms: 30_000, has_speech: true, quiet: *self.quiet.lock() }
             })
         }
     }
@@ -931,12 +938,15 @@ mod tests {
         text: String,
         /// The language each transcription was asked for.
         languages: Mutex<Vec<String>>,
+        /// Whether each transcription was told the audio was quiet.
+        quiet: Mutex<Vec<bool>>,
         /// What successive language detections return.
         detections: Mutex<std::collections::VecDeque<String>>,
     }
     impl Transcriber for FakeStt {
         fn transcribe(&self, _: &[f32], request: &SttRequest) -> AppResult<String> {
             self.languages.lock().push(request.language.clone());
+            self.quiet.lock().push(request.quiet);
             Ok(self.text.clone())
         }
         fn resolve_language(&self, _: &[f32], request: &SttRequest) -> String {
@@ -1083,6 +1093,19 @@ mod tests {
         assert_eq!(h.phases().last(), Some(&Phase::Done));
         assert_eq!(h.store.history("", 10).unwrap()[0].text, "Hello world.");
         assert_eq!(h.store.history("", 10).unwrap()[0].delivery, "pasted");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_decoder_is_told_when_the_recording_was_quiet() {
+        for quiet in [false, true] {
+            let h = harness("hello world", None);
+            *h.recorder.quiet.lock() = quiet;
+            h.press();
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            h.release();
+            settle().await;
+            assert_eq!(*h.stt.quiet.lock(), vec![quiet], "quiet recording = {quiet}");
+        }
     }
 
     #[tokio::test(start_paused = true)]

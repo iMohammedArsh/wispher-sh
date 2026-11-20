@@ -19,6 +19,10 @@ pub struct SttRequest {
     pub model: String,
     /// Names and jargon to bias recognition toward.
     pub vocabulary: Vec<String>,
+    /// The audio is a whisper or a far-away voice (`Captured::quiet`). Whisper
+    /// rates such speech as "probably silence" far more often than it is, so the
+    /// decoder keeps segments it would normally throw away.
+    pub quiet: bool,
 }
 
 /// Speech-to-text. Synchronous: callers run it on a blocking thread.
