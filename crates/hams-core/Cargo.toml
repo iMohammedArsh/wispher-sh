@@ -22,7 +22,7 @@ parking_lot = "0.12"
 thiserror = "2"
 tracing = "0.1"
 rusqlite = { version = "0.32", features = ["bundled"] }
-dirs = "5"
+dirs = "7"
 rubato = "0.16"
 regex = "1"
 whisper-rs = { version = "0.15", optional = true }

@@ -151,13 +151,6 @@ fun PrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifi
     SolidButton(text, onClick, modifier, enabled, c.primary, c.primaryInk, icon)
 }
 
-/** Coral: only for actions that start talking. */
-@Composable
-fun VoiceButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, @DrawableRes icon: Int? = null) {
-    val c = Tokens.colors
-    SolidButton(text, onClick, modifier, enabled, c.voice, c.voiceInk, icon)
-}
-
 /** A tonal button, one step from the ground. */
 @Composable
 fun QuietButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, @DrawableRes icon: Int? = null) {
@@ -350,11 +343,6 @@ fun StepDot(number: Int, done: Boolean) {
     ) {
         Text(if (done) "✓" else "$number", style = HamsType.small, color = if (done) c.surface else c.muted)
     }
-}
-
-@Composable
-fun Spaced(content: @Composable ColumnScope.() -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
 }
 
 /** A screen header with a back arrow (sub-screens of You). */

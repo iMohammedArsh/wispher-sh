@@ -88,11 +88,6 @@ impl Shortcut {
         Ok(Shortcut::Combo { mods, key })
     }
 
-    #[allow(dead_code)]
-    pub fn is_solo(&self) -> bool {
-        matches!(self, Shortcut::Solo(_))
-    }
-
     /// Whether this machine can produce the shortcut at all.
     pub fn supported_here(&self) -> bool {
         !matches!(self, Shortcut::Solo(ModKey::Fn)) || cfg!(target_os = "macos")

@@ -52,8 +52,6 @@ data class WordDiff(val heard: List<Run>, val written: List<Run>, val dropped: I
 
 data class Stats(
     val totalWords: Long,
-    val totalDictations: Long,
-    val wordsToday: Long,
     val minutesSaved: Long,
     val currentStreak: Long,
     /** Local date "YYYY-MM-DD" → words, for days with activity (last 120). */
@@ -113,7 +111,7 @@ object Parse {
             }
         }
         Stats(
-            it.optLong("total_words"), it.optLong("total_dictations"), it.optLong("words_today"),
+            it.optLong("total_words"),
             it.optLong("minutes_saved"), it.optLong("current_streak"), activity,
         )
     }

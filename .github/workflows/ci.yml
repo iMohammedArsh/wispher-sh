@@ -60,3 +60,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p hams-core -p hams-mobile --no-default-features
+      # Fails when a Cargo.toml lists a crate no code uses, so the dependency
+      # tree only shrinks.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete
+      - run: cargo machete
