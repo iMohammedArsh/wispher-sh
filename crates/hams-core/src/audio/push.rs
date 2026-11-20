@@ -1,9 +1,12 @@
-//! A [`Recorder`] for platforms that capture audio themselves and hand it over
-//! (Android `AudioRecord`, iOS `AVAudioEngine`). The engine tells the platform
-//! when to open and close the microphone through [`MicControl`]; the platform
-//! pushes mono frames with [`PushRecorder::push`] in between.
+//! The one [`Recorder`], used on every platform. The platform captures audio
+//! itself (desktop: cpal, Android: `AudioRecord`, iOS: `AVAudioEngine`) and hands
+//! it over: the engine tells it when to open and close the microphone through
+//! [`MicControl`], and the platform pushes mono frames with
+//! [`PushRecorder::push`] in between. Buffering, the level meter, the tail after
+//! release, the length cap, previews and note chunks all live here, so a change
+//! to any of them reaches every platform at once.
 //!
-//! As on desktop, the microphone is open only while a recording runs.
+//! The microphone is open only while a recording runs.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
@@ -22,9 +25,10 @@ const MAX_SECONDS: usize = 600;
 
 /// Opens and closes the platform microphone.
 pub trait MicControl: Send + Sync {
-    /// Start capturing and pushing frames. Errors (no permission, busy mic) are
-    /// shown to the user.
-    fn start(&self) -> AppResult<()>;
+    /// Start capturing and pushing frames. `device` is the microphone the user
+    /// picked, by name; platforms that can't choose one (phones) ignore it.
+    /// Errors (no permission, busy mic) are shown to the user.
+    fn start(&self, device: Option<&str>) -> AppResult<()>;
     /// Stop capturing. Frames pushed after this are ignored.
     fn stop(&self);
 }
@@ -98,10 +102,10 @@ impl PushRecorder {
 }
 
 impl Recorder for PushRecorder {
-    fn start(&self, _device: Option<&str>) -> AppResult<()> {
+    fn start(&self, device: Option<&str>) -> AppResult<()> {
         self.samples.lock().clear();
         self.capturing.store(true, Ordering::Release);
-        if let Err(error) = self.mic.start() {
+        if let Err(error) = self.mic.start(device) {
             self.capturing.store(false, Ordering::Release);
             return Err(error);
         }
@@ -147,9 +151,12 @@ mod tests {
     struct FakeMic {
         open: AtomicUsize,
         fail: AtomicBool,
+        /// The microphone each start asked for.
+        devices: Mutex<Vec<Option<String>>>,
     }
     impl MicControl for FakeMic {
-        fn start(&self) -> AppResult<()> {
+        fn start(&self, device: Option<&str>) -> AppResult<()> {
+            self.devices.lock().push(device.map(str::to_string));
             if self.fail.load(Ordering::SeqCst) {
                 return Err(crate::error::AppError::Audio("no permission".into()));
             }
@@ -186,6 +193,16 @@ mod tests {
         assert_eq!(captured.duration_ms, 2_000);
         assert!(captured.has_speech);
         assert_eq!(recorder.level(), 0.0);
+    }
+
+    #[test]
+    fn the_chosen_microphone_reaches_the_platform() {
+        let (mic, recorder) = recorder();
+        recorder.start(Some("USB Mic")).unwrap();
+        recorder.cancel();
+        recorder.start(None).unwrap();
+        recorder.cancel();
+        assert_eq!(*mic.devices.lock(), vec![Some("USB Mic".to_string()), None]);
     }
 
     #[test]

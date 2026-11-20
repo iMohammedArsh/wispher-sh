@@ -265,7 +265,7 @@ mod tests {
     }
 
     /// Notes mode end to end on real speech: stream a long recording into a
-    /// buffer, take ~30 s chunks at pauses like `AudioRecorder::drain`, and
+    /// buffer, take ~30 s chunks at pauses like `PushRecorder::drain`, and
     /// check the joined chunks read like one pass over the whole recording.
     /// Make a long WAV with `say -f some.txt -o /tmp/note.wav --data-format=LEI16@22050`,
     /// then `HAMS_TEST_NOTE_WAV=/tmp/note.wav cargo test --release real_speech_note -- --ignored --nocapture`

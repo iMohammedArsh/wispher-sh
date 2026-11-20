@@ -89,7 +89,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let recording = Arc::new(AtomicBool::new(false));
 
     let deps = Deps {
-        recorder: Arc::new(audio::AudioRecorder::new()),
+        recorder: audio::new_recorder(),
         stt: Arc::clone(&stt),
         desktop: Arc::new(platform::NativeDesktop),
         polisher: {

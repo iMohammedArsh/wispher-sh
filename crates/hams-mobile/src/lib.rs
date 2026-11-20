@@ -228,7 +228,8 @@ pub trait DownloadListener: Send + Sync {
 struct HostMic(Arc<dyn Host>);
 
 impl MicControl for HostMic {
-    fn start(&self) -> AppResult<()> {
+    fn start(&self, _device: Option<&str>) -> AppResult<()> {
+        // A phone has one microphone to use; the system decides which.
         if self.0.mic_start() {
             Ok(())
         } else {
