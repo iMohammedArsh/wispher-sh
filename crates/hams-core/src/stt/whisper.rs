@@ -2,11 +2,10 @@
 //! between dictations, so there's no server process, port or WAV file involved.
 
 use std::path::PathBuf;
-
 use parking_lot::Mutex;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState};
 
-use super::{models, pick_language, strip_stock_phrases, sanitize, vocabulary_prompt, SttRequest, Transcriber};
+use super::{models, pick_language, strip_stock_phrases, sanitize, vocabulary_prompt, CancelFn, SttRequest, Transcriber};
 use crate::error::{AppError, AppResult};
 
 struct Loaded {
@@ -60,23 +59,32 @@ fn threads() -> usize {
 /// Whisper's language scores for the first 30 s of `samples`, narrowed to the
 /// allowed languages by [`pick_language`]. "auto" if detection fails.
 fn detect_language(loaded: &mut Loaded, samples: &[f32], allowed: &[String]) -> String {
-    let window = &samples[..samples.len().min(30 * 16_000)];
-    let detected = loaded.state.pcm_to_mel(window, threads()).and_then(|()| loaded.state.lang_detect(0, threads()));
-    match detected {
-        Ok((_, probs)) => {
-            let scores: Vec<(&str, f32)> = probs
-                .iter()
-                .enumerate()
-                .filter_map(|(id, p)| whisper_rs::get_lang_str(id as i32).map(|code| (code, *p)))
-                .collect();
+    match language_scores(loaded, samples) {
+        Some(scores) => {
             let chosen = pick_language(&scores, allowed);
             let best = scores.iter().max_by(|a, b| a.1.total_cmp(&b.1));
             tracing::debug!("Language: Whisper's best guess {best:?}, allowed {allowed:?}, using {chosen}");
             chosen
         }
+        None => "auto".into(),
+    }
+}
+
+/// Whisper's probability for every language it knows, from the first 30 s.
+fn language_scores(loaded: &mut Loaded, samples: &[f32]) -> Option<Vec<(&'static str, f32)>> {
+    let window = &samples[..samples.len().min(30 * 16_000)];
+    let detected = loaded.state.pcm_to_mel(window, threads()).and_then(|()| loaded.state.lang_detect(0, threads()));
+    match detected {
+        Ok((_, probs)) => Some(
+            probs
+                .iter()
+                .enumerate()
+                .filter_map(|(id, p)| whisper_rs::get_lang_str(id as i32).map(|code| (code, *p)))
+                .collect(),
+        ),
         Err(error) => {
             tracing::warn!("Language detection failed: {error}");
-            "auto".into()
+            None
         }
     }
 }
@@ -102,23 +110,127 @@ fn no_speech_limit(quiet: bool) -> f32 {
     if quiet { NO_SPEECH_LIMIT_QUIET } else { NO_SPEECH_LIMIT }
 }
 
-impl Transcriber for WhisperEngine {
-    fn transcribe(&self, samples: &[f32], request: &SttRequest) -> AppResult<String> {
-        let mut slot = self.loaded.lock();
-        let loaded = self.ensure_loaded(&mut slot, &request.model)?;
+/// Whisper reads audio in 30 s windows and decodes each window on its own.
+const WINDOW_SECONDS: f32 = 30.0;
 
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        params.set_n_threads(threads() as i32);
-        params.set_translate(false);
-        params.set_no_context(true);
-        params.set_no_timestamps(true);
-        params.set_print_special(false);
-        params.set_print_progress(false);
-        params.set_print_realtime(false);
-        params.set_print_timestamps(false);
-        params.set_suppress_blank(true);
-        params.set_suppress_nst(true);
-        params.set_temperature(0.0);
+/// The most tokens one window may decode, scaled to the audio in it. Real speech
+/// is a handful of tokens a second (more in scripts that take several tokens a
+/// word), so this is generous; it only stops a repetition loop from running to
+/// Whisper's own 220-token limit on a short clip.
+fn max_tokens_for(samples: usize) -> i32 {
+    let seconds = (samples as f32 / 16_000.0).min(WINDOW_SECONDS);
+    ((seconds * 20.0) as i32 + 32).clamp(48, 220)
+}
+
+/// Encoder frames to use for a clip shorter than a window, or 0 for Whisper's
+/// default (the full 30 s, which costs the same for a 3 s clip as for a 30 s one).
+/// 50 frames per second of audio plus a margin, rounded up to 64.
+fn audio_ctx_for(samples: usize, enabled: bool) -> i32 {
+    if !enabled || samples as f32 / 16_000.0 >= WINDOW_SECONDS - 1.0 {
+        return 0;
+    }
+    let frames = (samples as f32 / 16_000.0 * 50.0) as i32 + 64;
+    ((frames + 63) / 64 * 64).clamp(384, 1500)
+}
+
+/// Encode only as much audio as there is. Off: it hasn't been benchmarked on the
+/// phone model yet. To try it, set this to `cfg!(any(target_os = "android", target_os = "ios"))`
+/// and compare `quiet_speech_bench` / `language_bench` with `HAMS_TEST_MODEL=base-q5_1`
+/// before and after; keep it only if WER moves by 2 points or less and language
+/// detection doesn't change.
+const SHORT_AUDIO_CTX: bool = false;
+
+/// Called by whisper.cpp between encoder and decoder steps; `data` is a `*const CancelFn`.
+unsafe extern "C" fn abort_trampoline(data: *mut std::ffi::c_void) -> bool {
+    let cancel = &*(data as *const CancelFn);
+    cancel()
+}
+
+/// One pass of Whisper over `samples`, written in `language` (a code, or "auto").
+/// `cancel` stops the pass within one encoder or decoder step.
+fn decode(
+    loaded: &mut Loaded,
+    samples: &[f32],
+    request: &SttRequest,
+    language: &str,
+    cancel: Option<&CancelFn>,
+) -> AppResult<String> {
+    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    params.set_n_threads(threads() as i32);
+    params.set_translate(false);
+    params.set_no_context(true);
+    params.set_no_timestamps(true);
+    params.set_print_special(false);
+    params.set_print_progress(false);
+    params.set_print_realtime(false);
+    params.set_print_timestamps(false);
+    params.set_suppress_blank(true);
+    params.set_suppress_nst(true);
+    params.set_temperature(0.0);
+    // One decode per window. Whisper's default (0.2) re-decodes a window at up to
+    // five higher temperatures whenever it isn't confident, which on a phone CPU
+    // turned quiet or accented audio into a minute of waiting.
+    params.set_temperature_inc(0.0);
+    params.set_max_tokens(max_tokens_for(samples.len()));
+    params.set_audio_ctx(audio_ctx_for(samples.len(), SHORT_AUDIO_CTX));
+    params.set_language(Some(language));
+    let prompt = vocabulary_prompt(&request.vocabulary);
+    if !prompt.is_empty() {
+        params.set_initial_prompt(&prompt);
+    }
+    // Not `set_abort_callback_safe`: in whisper-rs 0.15 its trampoline reads the
+    // user data as the wrong type and crashes on the first call. `cancel` outlives
+    // the `full` call below, which is the only time whisper.cpp uses the pointer.
+    if let Some(cancel) = cancel {
+        // SAFETY: the pointer is to a `CancelFn` that lives until the end of this function.
+        unsafe {
+            params.set_abort_callback(Some(abort_trampoline));
+            params.set_abort_callback_user_data(cancel as *const CancelFn as *mut std::ffi::c_void);
+        }
+    }
+
+    let started = std::time::Instant::now();
+    loaded.state.full(params, samples).map_err(|e| {
+        if cancel.is_some_and(|c| c()) {
+            AppError::Transcription("cancelled".into())
+        } else {
+            AppError::Transcription(format!("Whisper failed: {e}"))
+        }
+    })?;
+    let mut text = String::new();
+    for segment in loaded.state.as_iter() {
+        if segment.no_speech_probability() > no_speech_limit(request.quiet) {
+            continue;
+        }
+        if let Ok(words) = segment.to_str_lossy() {
+            let kept = strip_stock_phrases(&words);
+            if kept.len() != words.len() {
+                tracing::debug!("Dropped a likely hallucination from {words:?}");
+            }
+            text.push_str(&kept);
+            text.push(' ');
+        }
+    }
+    tracing::debug!(
+        "Whisper ({language}): {:.1}s of audio in {:?}",
+        samples.len() as f32 / 16_000.0,
+        started.elapsed()
+    );
+    Ok(sanitize(&text))
+}
+
+impl WhisperEngine {
+    fn run(&self, samples: &[f32], request: &SttRequest, cancel: Option<&CancelFn>) -> AppResult<String> {
+        let waiting = std::time::Instant::now();
+        let mut slot = self.loaded.lock();
+        let waited = waiting.elapsed();
+        if waited.as_millis() > 50 {
+            tracing::info!("Whisper was busy: waited {waited:?} for the model");
+        }
+        if cancel.is_some_and(|c| c()) {
+            return Err(AppError::Transcription("cancelled".into()));
+        }
+        let loaded = self.ensure_loaded(&mut slot, &request.model)?;
         // With a list of allowed languages, detect here and narrow the guess to
         // that list; otherwise let Whisper detect on its own.
         let language = if english_only(&request.model) {
@@ -126,41 +238,24 @@ impl Transcriber for WhisperEngine {
         } else if !is_auto(&request.language) {
             request.language.clone()
         } else if request.languages.iter().any(|l| !is_auto(l)) {
-            detect_language(loaded, samples, &request.languages)
+            let started = std::time::Instant::now();
+            let chosen = detect_language(loaded, samples, &request.languages);
+            tracing::debug!("Language detection took {:?}", started.elapsed());
+            chosen
         } else {
             "auto".into()
         };
-        params.set_language(Some(&language));
-        let prompt = vocabulary_prompt(&request.vocabulary);
-        if !prompt.is_empty() {
-            params.set_initial_prompt(&prompt);
-        }
+        decode(loaded, samples, request, &language, cancel)
+    }
+}
 
-        let started = std::time::Instant::now();
-        loaded
-            .state
-            .full(params, samples)
-            .map_err(|e| AppError::Transcription(format!("Whisper failed: {e}")))?;
-        let mut text = String::new();
-        for segment in loaded.state.as_iter() {
-            if segment.no_speech_probability() > no_speech_limit(request.quiet) {
-                continue;
-            }
-            if let Ok(words) = segment.to_str_lossy() {
-                let kept = strip_stock_phrases(&words);
-                if kept.len() != words.len() {
-                    tracing::debug!("Dropped a likely hallucination from {words:?}");
-                }
-                text.push_str(&kept);
-                text.push(' ');
-            }
-        }
-        tracing::debug!(
-            "Whisper: {:.1}s of audio in {:?}",
-            samples.len() as f32 / 16_000.0,
-            started.elapsed()
-        );
-        Ok(sanitize(&text))
+impl Transcriber for WhisperEngine {
+    fn transcribe(&self, samples: &[f32], request: &SttRequest) -> AppResult<String> {
+        self.run(samples, request, None)
+    }
+
+    fn transcribe_cancellable(&self, samples: &[f32], request: &SttRequest, cancel: &CancelFn) -> AppResult<String> {
+        self.run(samples, request, Some(cancel))
     }
 
     fn resolve_language(&self, samples: &[f32], request: &SttRequest) -> String {
@@ -188,7 +283,13 @@ impl Transcriber for WhisperEngine {
     }
 
     fn release(&self) {
-        if self.loaded.lock().take().is_some() {
+        // Never wait for a transcription that's running (this is called from the
+        // phone's main thread): the model is in use, so it isn't idle memory.
+        let Some(mut slot) = self.loaded.try_lock() else {
+            tracing::info!("Kept the Whisper model: a transcription is running");
+            return;
+        };
+        if slot.take().is_some() {
             tracing::info!("Released the Whisper model");
         }
     }
@@ -197,6 +298,34 @@ impl Transcriber for WhisperEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn token_cap_scales_with_the_clip_but_stays_generous() {
+        assert_eq!(max_tokens_for(0), 48);
+        assert_eq!(max_tokens_for(16_000 * 4), 112);
+        // A window is at most 30 s, so a long recording gets Whisper's own limit.
+        assert_eq!(max_tokens_for(16_000 * 30), 220);
+        assert_eq!(max_tokens_for(16_000 * 600), 220);
+        // ~7 tokens a second would already be fast English speech.
+        assert!(max_tokens_for(16_000 * 10) > 70);
+    }
+
+    #[test]
+    fn audio_context_is_whisper_default_unless_enabled_and_the_clip_is_short() {
+        assert_eq!(audio_ctx_for(16_000 * 4, false), 0);
+        assert_eq!(audio_ctx_for(16_000 * 30, true), 0);
+        assert_eq!(audio_ctx_for(16_000 * 29, true), 0, "a nearly full window uses the whole window");
+        assert!(!SHORT_AUDIO_CTX, "enable only after benchmarking on the phone model");
+    }
+
+    #[test]
+    fn a_short_audio_context_covers_the_audio_in_steps_of_64() {
+        for seconds in [1.0_f32, 4.0, 12.5, 25.0] {
+            let ctx = audio_ctx_for((seconds * 16_000.0) as usize, true);
+            assert!(ctx >= (seconds * 50.0) as i32, "{seconds}s → {ctx} frames can't hold the audio");
+            assert!(ctx % 64 == 0 && (384..=1500).contains(&ctx), "{seconds}s → {ctx}");
+        }
+    }
 
     /// Minimal 16-bit PCM WAV reader for the test fixture.
     fn read_wav(path: &str) -> (Vec<f32>, u32) {
@@ -241,6 +370,50 @@ mod tests {
         println!("{:?} in {:?}", text, started.elapsed());
         let lower = text.to_lowercase();
         assert!(lower.contains("hello") && lower.contains("dictation"), "got {text:?}");
+    }
+
+    /// A transcription that is cancelled stops within a step or two instead of
+    /// running to the end (so a live-preview pass can't make the final text wait),
+    /// and the engine is fine afterwards. Same fixture as `real_speech_is_transcribed`.
+    #[test]
+    #[ignore]
+    fn a_cancelled_transcription_stops_early_and_leaves_the_engine_usable() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let path = std::env::var("HAMS_TEST_WAV").expect("set HAMS_TEST_WAV");
+        let model = std::env::var("HAMS_TEST_MODEL").unwrap_or_else(|_| "small".into());
+        let (raw, rate) = read_wav(&path);
+        let one = crate::audio::dsp::prepare(&raw, rate).samples;
+        // Several windows long, so a full pass takes a good while.
+        let long: Vec<f32> = one.iter().cycle().take(one.len().max(1) * 8).copied().collect();
+        let engine = WhisperEngine::new();
+        let request = SttRequest { language: "en".into(), model, ..SttRequest::default() };
+        engine.transcribe(&one, &request).unwrap(); // load the model
+
+        let started = std::time::Instant::now();
+        engine.transcribe(&long, &request).unwrap();
+        let full = started.elapsed();
+
+        let flag = Arc::new(AtomicBool::new(false));
+        let cancel: CancelFn = { let flag = Arc::clone(&flag); Arc::new(move || flag.load(Ordering::Relaxed)) };
+        let trigger = { let flag = Arc::clone(&flag); std::thread::spawn(move || { std::thread::sleep(full / 10); flag.store(true, Ordering::Relaxed); }) };
+        let started = std::time::Instant::now();
+        let result = engine.transcribe_cancellable(&long, &request, &cancel);
+        let cancelled_after = started.elapsed();
+        trigger.join().unwrap();
+        println!("full pass {full:?}; cancelled after {cancelled_after:?}: {result:?}");
+        assert!(result.is_err(), "a cancelled pass reports an error");
+        assert!(cancelled_after < full / 2, "cancelling saved most of the work");
+
+        // Already cancelled before it starts: no work at all.
+        let started = std::time::Instant::now();
+        assert!(engine.transcribe_cancellable(&long, &request, &cancel).is_err());
+        assert!(started.elapsed() < full / 4);
+
+        // The aborted state is reusable and gives the same text as before.
+        let again = engine.transcribe(&one, &request).unwrap();
+        assert_eq!(again, engine.transcribe(&one, &request).unwrap());
+        assert!(!again.is_empty());
     }
 
     /// Accented speech and the allowed-languages list. English read by the
@@ -498,5 +671,55 @@ mod tests {
         let out = std::env::var("HAMS_BENCH_CSV").unwrap_or_else(|_| format!("{dir}/results-{model}.csv"));
         std::fs::write(&out, csv).expect("write csv");
         println!("\nCSV: {out}");
+    }
+
+    /// Language detection on a folder of clips of one language (`clip00.wav`,
+    /// `clip00.txt` with the reference text, …). For each clip it prints Whisper's
+    /// top guesses and what [`detect_language`] would choose for a few allowed
+    /// lists, then a summary. Malayalam clips: the SMC Malayalam Speech Corpus.
+    /// `HAMS_TEST_LANG_DIR=/path HAMS_TEST_LANG=ml cargo test --release language_bench -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn language_bench() {
+        let dir = std::env::var("HAMS_TEST_LANG_DIR").expect("set HAMS_TEST_LANG_DIR");
+        let expected = std::env::var("HAMS_TEST_LANG").unwrap_or_else(|_| "ml".into());
+        let model = std::env::var("HAMS_TEST_MODEL").unwrap_or_else(|_| "small".into());
+        let engine = WhisperEngine::new();
+        let mut slot = engine.loaded.lock();
+        let loaded = engine.ensure_loaded(&mut slot, &model).expect("model");
+        let lists: Vec<(&str, Vec<String>)> = vec![
+            ("any", vec![]),
+            ("ml,en", vec!["ml".into(), "en".into()]),
+            ("en,ml", vec!["en".into(), "ml".into()]),
+            ("ml,en,ar,zh", ["ml", "en", "ar", "zh"].map(String::from).to_vec()),
+            ("en,ml,ar,zh", ["en", "ml", "ar", "zh"].map(String::from).to_vec()),
+        ];
+        let mut right = vec![0usize; lists.len()];
+        let mut clips = 0;
+        let mut names: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "wav")).collect();
+        names.sort();
+        for path in names {
+            let (raw, rate) = read_wav(&path.to_string_lossy());
+            let captured = crate::audio::dsp::prepare(&raw, rate);
+            if !captured.has_speech {
+                continue;
+            }
+            let Some(scores) = language_scores(loaded, &captured.samples) else { continue };
+            let mut top: Vec<_> = scores.clone();
+            top.sort_by(|a, b| b.1.total_cmp(&a.1));
+            let top: Vec<String> = top.iter().take(4).map(|(c, p)| format!("{c} {:.2}", p)).collect();
+            let picks: Vec<String> = lists.iter().map(|(_, l)| pick_language(&scores, l)).collect();
+            for (i, p) in picks.iter().enumerate() {
+                if *p == expected || (i == 0 && *p == expected) {
+                    right[i] += 1;
+                }
+            }
+            clips += 1;
+            println!("{:<12} {:.1}s  {}  → {}", path.file_stem().unwrap().to_string_lossy(), captured.samples.len() as f32 / 16_000.0, top.join(", "), picks.join(" | "));
+        }
+        println!("\nmodel {model}, {clips} clips of {expected}");
+        for ((name, _), n) in lists.iter().zip(&right) {
+            println!("  allowed {name:<12} {n}/{clips} correct");
+        }
     }
 }

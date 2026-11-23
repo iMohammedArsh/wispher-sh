@@ -30,6 +30,8 @@ class EngineOnDeviceTest {
     private class FakeField : Host {
         var engine: HamsEngine? = null
         var pcm: ByteArray = ByteArray(0)
+        /** Pause after each 50 ms buffer: 50 is real time, like a microphone. */
+        var paceMs = 10L
         val text = StringBuilder()
         val statuses = CopyOnWriteArrayList<DictationStatus>()
 
@@ -42,7 +44,7 @@ class EngineOnDeviceTest {
                     val end = minOf(offset + chunk, pcm.size)
                     engine?.pushAudioPcm16(pcm.copyOfRange(offset, end), 16_000u)
                     offset = end
-                    Thread.sleep(10)
+                    Thread.sleep(paceMs)
                 }
             }.start()
             return true
@@ -80,6 +82,17 @@ class EngineOnDeviceTest {
             pos += 8 + size
         }
         error("no data chunk")
+    }
+
+    /** `copies` of `pcm` with `gapMs` of silence between them: a long dictation with pauses to cut at. */
+    private fun repeated(pcm: ByteArray, copies: Int, gapMs: Int): ByteArray {
+        val gap = ByteArray(16_000 * 2 * gapMs / 1000)
+        val out = java.io.ByteArrayOutputStream()
+        repeat(copies) {
+            out.write(pcm)
+            out.write(gap)
+        }
+        return out.toByteArray()
     }
 
     private object NoVault : SecretVault {
@@ -126,5 +139,59 @@ class EngineOnDeviceTest {
             assertTrue("filler removed: $written", !written.lowercase().startsWith("um"))
         }
 
+    }
+
+    /**
+     * A dictation of about a minute used to be transcribed only after stop. Now it is
+     * transcribed in ~30 s pieces while recording, so what is left after stop is the
+     * last piece. Run with the live preview off and on: the preview must not slow the
+     * final text down either. Real-time pacing, so this takes about two minutes.
+     * Compare "ms after release" with the length of the speech in logcat (tag HamsTest).
+     */
+    @Test
+    fun aLongDictationIsReadyShortlyAfterStopWithAndWithoutLivePreview() {
+        com.wusla.hams.core.Hams.init(context)
+        val dir = File(context.cacheDir, "engine-long-${System.nanoTime()}").apply { mkdirs() }
+        val host = FakeField()
+        val engine = HamsEngine(dir.absolutePath, host, NoVault)
+        host.engine = engine
+        host.paceMs = 50
+        val one = pcmOf(testContext.assets.open("dictation.wav").use { it.readBytes() })
+        host.pcm = repeated(one, copies = 14, gapMs = 700)
+        val speechSeconds = host.pcm.size / 32_000
+        engine.downloadModel("base-q5_1", object : DownloadListener {
+            override fun onProgress(fraction: Float) {}
+        })
+        assertTrue("model downloaded", engine.modelReady())
+        // A short dictation first, so the model is loaded and warm for both rounds.
+        engine.press(Pad.DICTATE); Thread.sleep(1_000); engine.release(Pad.DICTATE)
+        Thread.sleep(8_000)
+
+        for (preview in listOf(false, true)) {
+            val settings = org.json.JSONObject(engine.settingsJson())
+            settings.getJSONObject("settings").put("live_preview", preview)
+            engine.saveSettingsJson(settings.getJSONObject("settings").toString())
+            host.statuses.clear()
+            host.text.setLength(0)
+            engine.press(Pad.DICTATE)
+            Thread.sleep(host.pcm.size / 32L + 300)
+            val released = System.currentTimeMillis()
+            engine.release(Pad.DICTATE)
+
+            val deadline = System.currentTimeMillis() + 120_000
+            while (host.statuses.none { it.phase == Phase.DONE || it.phase == Phase.ERROR }) {
+                assertTrue("timed out; statuses ${host.statuses}", System.currentTimeMillis() < deadline)
+                Thread.sleep(20)
+            }
+            val error = host.statuses.firstOrNull { it.phase == Phase.ERROR }
+            assertTrue("error: ${error?.message}", error == null)
+            val waited = System.currentTimeMillis() - released
+            val written = host.text.toString()
+            android.util.Log.i("HamsTest", "Long dictation, live preview $preview: $waited ms after release for $speechSeconds s of speech; ${written.length} characters")
+            // Every repeat of the sentence made it into the text, across the chunk cuts.
+            val heard = Regex("dictation test", RegexOption.IGNORE_CASE).findAll(written).count()
+            assertTrue("heard $heard of 14 repeats: $written", heard >= 12)
+            assertTrue("took $waited ms after release", waited < 60_000)
+        }
     }
 }

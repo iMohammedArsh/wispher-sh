@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use parking_lot::Mutex;
 use serde::Serialize;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
@@ -22,7 +23,7 @@ use crate::llm::{self, Polisher, Task};
 use crate::desktop::{AppTarget, Delivered, Desktop};
 use crate::settings::{DeliveryMode, Settings, SettingsStore};
 use crate::store::{self, NewHistory, Store};
-use crate::stt::{SttRequest, Transcriber};
+use crate::stt::{CancelFn, SttRequest, Transcriber};
 use crate::text;
 
 /// A press shorter than this is a tap, not a hold.
@@ -32,9 +33,14 @@ const DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(350);
 /// Live preview: how often the recent audio is re-transcribed, and how much of it.
 const PREVIEW_EVERY: Duration = Duration::from_millis(1_000);
 pub const PREVIEW_WINDOW_SECONDS: u32 = 20;
-/// Notes mode: transcribe the recording in chunks of about this length while it runs.
-const NOTE_CHUNK_SECONDS: u32 = 30;
-const NOTE_POLL: Duration = Duration::from_millis(1_000);
+/// Long recordings (voice notes and dictations): transcribe about this much audio
+/// at a time while the user is still talking, so only the last piece is left to
+/// do when they stop.
+const CHUNK_SECONDS: u32 = 30;
+const CHUNK_POLL: Duration = Duration::from_millis(1_000);
+/// Preview passes need this much audio before they pick a language, so a
+/// one-word start can't lock the preview into the wrong one.
+const PREVIEW_LANGUAGE_MIN_SAMPLES: usize = 3 * 16_000;
 /// Shorter notes aren't worth an AI summary.
 const NOTE_SUMMARY_MIN_WORDS: i64 = 30;
 /// Learning from fields: wait for the paste to land, then re-read the field
@@ -191,33 +197,63 @@ struct Recording {
     started_at: i64,
     meter: JoinHandle<()>,
     preview: Option<JoinHandle<()>>,
-    note: Option<NoteTask>,
+    /// Set when the recording ends: a preview pass still running then gives up at
+    /// once instead of making the final transcription wait for it.
+    preview_stop: Arc<AtomicBool>,
+    chunks: Option<ChunkTask>,
 }
 
-/// The background chunk transcriber of a voice note.
-struct NoteTask {
+/// The background chunk transcriber of a long recording.
+struct ChunkTask {
     stop: tokio::sync::watch::Sender<bool>,
-    chunks: JoinHandle<NoteChunks>,
+    chunks: JoinHandle<Chunks>,
 }
 
-/// What the chunk task hands back when a voice note stops.
+/// What the chunk task hands back when the recording stops.
 #[derive(Default)]
-struct NoteChunks {
+struct Chunks {
+    /// A note's chunks are already cleaned up; a dictation's are the raw
+    /// Whisper text, cleaned once after being joined with the last piece.
     texts: Vec<String>,
     /// Detected from the first chunk with speech, then used for the rest of
-    /// the note so a long recording can't switch languages halfway.
+    /// the recording so a long one can't switch languages halfway.
     language: Option<String>,
+}
+
+/// What the chunk task and the live preview share.
+#[derive(Clone, Default)]
+struct PreviewLink {
+    /// A chunk is being transcribed. The preview steps aside: the chunk is on the
+    /// way to the final text, the preview is only for show.
+    chunk_busy: Arc<AtomicBool>,
+    /// The raw text of the chunks finished so far, shown before the live words.
+    done: Arc<Mutex<String>>,
+}
+
+/// Marks a chunk as being transcribed until dropped.
+struct BusyGuard(Arc<AtomicBool>);
+impl BusyGuard {
+    fn new(flag: &Arc<AtomicBool>) -> Self {
+        flag.store(true, Ordering::Release);
+        Self(Arc::clone(flag))
+    }
+}
+impl Drop for BusyGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 impl Recording {
     /// Stop the background tasks tied to this recording.
     fn stop_tasks(&self) {
         self.meter.abort();
+        self.preview_stop.store(true, Ordering::Release);
         if let Some(preview) = &self.preview {
             preview.abort();
         }
-        if let Some(note) = &self.note {
-            note.chunks.abort();
+        if let Some(chunks) = &self.chunks {
+            chunks.chunks.abort();
         }
     }
 }
@@ -381,8 +417,11 @@ impl Actor {
                 }
             })
         };
-        let preview = (settings.live_preview && kind == Kind::Dictate).then(|| spawn_preview(&self.deps, &settings));
-        let note = (kind == Kind::Note).then(|| spawn_note_chunks(&self.deps, &settings));
+        let link = PreviewLink::default();
+        let preview_stop = Arc::new(AtomicBool::new(false));
+        let preview = (settings.live_preview && kind == Kind::Dictate)
+            .then(|| spawn_preview(&self.deps, &settings, &link, &preview_stop));
+        let chunks = matches!(kind, Kind::Note | Kind::Dictate).then(|| spawn_chunks(&self.deps, &settings, kind, link));
         let session = self.next_session;
         self.next_session += 1;
         let rec = Recording {
@@ -396,7 +435,8 @@ impl Actor {
             started_at: store::now_ms(),
             meter,
             preview,
-            note,
+            preview_stop,
+            chunks,
         };
         self.deps.ui.status(&recording_status(&rec));
         self.state = State::Recording(rec);
@@ -413,16 +453,16 @@ impl Actor {
 
     fn finish(&mut self) {
         let State::Recording(mut rec) = std::mem::replace(&mut self.state, State::Idle) else { return };
-        let note = rec.note.take();
+        let chunks = rec.chunks.take();
         rec.stop_tasks();
         self.deps.recording.store(false, Ordering::Release);
         self.state = State::Processing(rec.session);
         let (deps, tx, session) = (self.deps.clone(), self.tx.clone(), rec.session);
         let job = Job { kind: rec.kind, locked: rec.mode == Mode::Locked, target: rec.target, started_at: rec.started_at };
         tokio::spawn(async move {
-            match note {
-                Some(note) => process_note(&deps, job, note).await,
-                None => process(&deps, job).await,
+            match (job.kind, chunks) {
+                (Kind::Note, Some(chunks)) => process_note(&deps, job, chunks).await,
+                (_, chunks) => process(&deps, job, chunks).await,
             }
             let _ = tx.send(Input::Finished(session));
         });
@@ -455,28 +495,59 @@ fn recording_status(rec: &Recording) -> Status {
     }
 }
 
-/// Re-transcribe the last few seconds about once a second and show it in the
-/// overlay. It's a preview only: the pasted text always comes from one final
-/// pass over the whole recording, so nothing here can affect the result.
-fn spawn_preview(deps: &Deps, settings: &Settings) -> JoinHandle<()> {
+/// Re-transcribe the last few seconds and show it in the overlay. It's a preview
+/// only: the pasted text always comes from the final pass, so nothing here can
+/// affect the result. It never gets in the way of the final text:
+/// - a pass is cancelled as soon as the recording ends or a chunk needs the engine;
+/// - the next pass waits at least as long as the last one took, so a slow phone
+///   isn't kept busy (and hot) for the whole recording;
+/// - the language is picked once, not on every pass.
+fn spawn_preview(deps: &Deps, settings: &Settings, link: &PreviewLink, stop: &Arc<AtomicBool>) -> JoinHandle<()> {
     let (recorder, stt, ui) = (Arc::clone(&deps.recorder), Arc::clone(&deps.stt), Arc::clone(&deps.ui));
-    let request = stt_request(settings, &deps.store.dictionary().unwrap_or_default());
+    let mut request = stt_request(settings, &deps.store.dictionary().unwrap_or_default());
     let options = text::Options { voice_commands: settings.voice_commands, remove_fillers: settings.remove_fillers };
+    let (link, stop) = (link.clone(), Arc::clone(stop));
+    let cancel: CancelFn = {
+        let (stop, busy) = (Arc::clone(&stop), Arc::clone(&link.chunk_busy));
+        Arc::new(move || stop.load(Ordering::Acquire) || busy.load(Ordering::Acquire))
+    };
     tokio::spawn(async move {
         let mut shown = String::new();
+        let mut language_locked = false;
+        let mut last_pass = Duration::ZERO;
         loop {
-            tokio::time::sleep(PREVIEW_EVERY).await;
-            let (recorder, stt, request) = (Arc::clone(&recorder), Arc::clone(&stt), request.clone());
+            tokio::time::sleep(PREVIEW_EVERY.max(last_pass)).await;
+            if link.chunk_busy.load(Ordering::Acquire) {
+                last_pass = Duration::ZERO;
+                continue;
+            }
+            let began = Instant::now();
+            let (recorder, stt, cancel, mut pass) = (Arc::clone(&recorder), Arc::clone(&stt), Arc::clone(&cancel), request.clone());
+            let lock = !language_locked;
             let heard = tokio::task::spawn_blocking(move || {
                 let captured = recorder.snapshot().filter(|c| c.has_speech)?;
-                let request = SttRequest { quiet: captured.quiet, ..request };
-                stt.transcribe(&captured.samples, &request).ok()
+                pass.quiet = captured.quiet;
+                let language = (lock && captured.samples.len() >= PREVIEW_LANGUAGE_MIN_SAMPLES)
+                    .then(|| stt.resolve_language(&captured.samples, &pass));
+                if let Some(language) = &language {
+                    pass.language = language.clone();
+                }
+                let heard = stt.transcribe_cancellable(&captured.samples, &pass, &cancel).ok();
+                Some((language, heard))
             })
             .await
             .ok()
             .flatten();
+            last_pass = began.elapsed();
+            let Some((language, heard)) = heard else { continue };
+            if let Some(language) = language.filter(|l| l != "auto") {
+                request.language = language;
+                language_locked = true;
+            }
             if let Some(heard) = heard {
-                let text = text::clean(&heard, &options);
+                let earlier = link.done.lock().clone();
+                let joined = if earlier.is_empty() { heard } else { format!("{earlier} {heard}") };
+                let text = text::clean(&joined, &options);
                 if text != shown {
                     ui.partial(&text);
                     shown = text;
@@ -486,29 +557,35 @@ fn spawn_preview(deps: &Deps, settings: &Settings) -> JoinHandle<()> {
     })
 }
 
-/// Notes mode: while recording, take ~30 s of audio at a time (cut at a pause),
-/// transcribe it, and report the transcript so far. The first chunk with
-/// speech fixes the note's language. Returns the chunks when told to stop,
-/// after finishing the one in flight.
-fn spawn_note_chunks(deps: &Deps, settings: &Settings) -> NoteTask {
+/// While recording, take about 30 s of audio at a time (cut at a pause),
+/// transcribe it, and keep the text. The first chunk with speech fixes the
+/// language. Returns the chunks when told to stop, after finishing the one in
+/// flight.
+///
+/// A voice note cleans each chunk and reports the transcript so far. A dictation
+/// keeps the raw Whisper text, so that "scratch that" and the like still work
+/// across a chunk boundary once the whole text is cleaned in one go.
+fn spawn_chunks(deps: &Deps, settings: &Settings, kind: Kind, link: PreviewLink) -> ChunkTask {
     let (recorder, stt, ui) = (Arc::clone(&deps.recorder), Arc::clone(&deps.stt), Arc::clone(&deps.ui));
     let mut request = stt_request(settings, &deps.store.dictionary().unwrap_or_default());
     let options = text::Options { voice_commands: settings.voice_commands, remove_fillers: settings.remove_fillers };
     let (stop, mut stopped) = tokio::sync::watch::channel(false);
     let chunks = tokio::spawn(async move {
-        let mut out = NoteChunks::default();
+        let mut out = Chunks::default();
         loop {
             tokio::select! {
-                _ = tokio::time::sleep(NOTE_POLL) => {}
+                _ = tokio::time::sleep(CHUNK_POLL) => {}
                 _ = stopped.changed() => break,
             }
-            let (recorder, stt, chunk_request) = (Arc::clone(&recorder), Arc::clone(&stt), request.clone());
+            let (recorder, stt, chunk_request, busy) = (Arc::clone(&recorder), Arc::clone(&stt), request.clone(), Arc::clone(&link.chunk_busy));
             let lock = out.language.is_none();
             let heard = tokio::task::spawn_blocking(move || {
-                let captured = recorder.drain(NOTE_CHUNK_SECONDS)?;
+                let captured = recorder.drain(CHUNK_SECONDS)?;
                 if !captured.has_speech {
                     return Some((None, Ok(String::new())));
                 }
+                // The live preview steps aside until this chunk is done.
+                let _busy = BusyGuard::new(&busy);
                 let mut chunk_request = SttRequest { quiet: captured.quiet, ..chunk_request };
                 let language = lock.then(|| stt.resolve_language(&captured.samples, &chunk_request));
                 if let Some(language) = &language {
@@ -521,24 +598,31 @@ fn spawn_note_chunks(deps: &Deps, settings: &Settings) -> NoteTask {
             .flatten();
             let Some((language, heard)) = heard else { continue };
             if let Some(language) = language.filter(|l| l != "auto") {
-                tracing::info!("Voice note language: {language}");
+                tracing::info!("Chunk language: {language}");
                 request.language = language.clone();
                 out.language = Some(language);
             }
             match heard {
-                Ok(heard) => {
+                Ok(heard) if kind == Kind::Note => {
                     let text = text::clean(&heard, &options);
                     if !text.is_empty() {
                         out.texts.push(text);
                         ui.note_progress(&out.texts.join("\n\n"));
                     }
                 }
-                Err(error) => tracing::warn!("A voice note chunk couldn't be transcribed: {error}"),
+                Ok(heard) => {
+                    let heard = heard.trim();
+                    if !heard.is_empty() {
+                        out.texts.push(heard.to_string());
+                        *link.done.lock() = out.texts.join(" ");
+                    }
+                }
+                Err(error) => tracing::warn!("A chunk of the recording couldn't be transcribed: {error}"),
             }
         }
         out
     });
-    NoteTask { stop, chunks }
+    ChunkTask { stop, chunks }
 }
 
 /// A short title from the start of the transcript, for notes without an AI summary.
@@ -549,12 +633,12 @@ fn fallback_title(transcript: &str) -> String {
     if words.len() > 7 { format!("{title}…") } else { title.to_string() }
 }
 
-async fn process_note(deps: &Deps, job: Job, note: NoteTask) {
+async fn process_note(deps: &Deps, job: Job, note: ChunkTask) {
     let status = |phase: Phase| Status { phase, kind: Kind::Note, locked: true, started_at: job.started_at, ..Status::default() };
     deps.ui.status(&status(Phase::Transcribing));
 
     let _ = note.stop.send(true);
-    let NoteChunks { texts: mut chunks, language } = note.chunks.await.unwrap_or_default();
+    let Chunks { texts: mut chunks, language } = note.chunks.await.unwrap_or_default();
     let recorder = Arc::clone(&deps.recorder);
     let rest = match blocking(move || recorder.stop()).await {
         Ok(rest) => rest,
@@ -725,7 +809,7 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> AppResult<T> + Send + '
     tokio::task::spawn_blocking(f).await.map_err(|e| AppError::Other(e.to_string()))?
 }
 
-async fn process(deps: &Deps, job: Job) {
+async fn process(deps: &Deps, job: Job, chunks: Option<ChunkTask>) {
     let released = Instant::now();
     let status = |phase: Phase| Status {
         phase,
@@ -741,26 +825,47 @@ async fn process(deps: &Deps, job: Job) {
     };
 
     deps.ui.status(&status(Phase::Transcribing));
+    // A long dictation was already transcribed piece by piece while the user
+    // talked; wait for the piece in flight, then only the last bit is left.
+    let (mut pieces, language) = match chunks {
+        Some(task) => {
+            let _ = task.stop.send(true);
+            let Chunks { texts, language } = task.chunks.await.unwrap_or_default();
+            (texts, language)
+        }
+        None => (Vec::new(), None),
+    };
     let recorder = Arc::clone(&deps.recorder);
     let captured = match blocking(move || recorder.stop()).await {
         Ok(captured) => captured,
         Err(error) => return fail(error),
     };
-    if !captured.has_speech {
+    if !captured.has_speech && pieces.is_empty() {
         tracing::debug!("No speech detected; nothing to do");
         return deps.ui.status(&Status::default());
     }
 
     let settings = deps.settings.get();
     let dictionary = deps.store.dictionary().unwrap_or_default();
-    let mut request = stt_request(&settings, &dictionary);
-    request.quiet = captured.quiet;
-    let stt = Arc::clone(&deps.stt);
-    let samples = captured.samples;
-    let raw = match blocking(move || stt.transcribe(&samples, &request)).await {
-        Ok(raw) => raw,
-        Err(error) => return fail(error),
-    };
+    if captured.has_speech {
+        let mut request = stt_request(&settings, &dictionary);
+        request.quiet = captured.quiet;
+        if let Some(language) = language {
+            request.language = language;
+        }
+        let (stt, samples) = (Arc::clone(&deps.stt), captured.samples);
+        match blocking(move || stt.transcribe(&samples, &request)).await {
+            Ok(last) => {
+                let last = last.trim();
+                if !last.is_empty() {
+                    pieces.push(last.to_string());
+                }
+            }
+            Err(error) if pieces.is_empty() => return fail(error),
+            Err(error) => tracing::warn!("The end of a dictation couldn't be transcribed: {error}"),
+        }
+    }
+    let raw = pieces.join(" ");
     let transcribed_in = released.elapsed();
     let options = text::Options { voice_commands: settings.voice_commands, remove_fillers: settings.remove_fillers };
     let cleaned = text::clean(&raw, &options);
@@ -942,12 +1047,39 @@ mod tests {
         quiet: Mutex<Vec<bool>>,
         /// What successive language detections return.
         detections: Mutex<std::collections::VecDeque<String>>,
+        /// What successive final/chunk transcriptions return before `text` repeats.
+        queue: Mutex<std::collections::VecDeque<AppResult<String>>>,
+        /// What a live-preview pass returns, if different from `text`.
+        preview: Mutex<Option<String>>,
+        /// A preview pass hangs until it is cancelled (like a slow Whisper pass).
+        hang_preview: AtomicBool,
+        /// A hanging preview pass has started.
+        preview_entered: AtomicBool,
+        /// A hanging preview pass was told to stop.
+        preview_cancelled: AtomicBool,
     }
     impl Transcriber for FakeStt {
         fn transcribe(&self, _: &[f32], request: &SttRequest) -> AppResult<String> {
             self.languages.lock().push(request.language.clone());
             self.quiet.lock().push(request.quiet);
-            Ok(self.text.clone())
+            self.queue.lock().pop_front().unwrap_or_else(|| Ok(self.text.clone()))
+        }
+        fn transcribe_cancellable(&self, samples: &[f32], request: &SttRequest, cancel: &CancelFn) -> AppResult<String> {
+            if self.hang_preview.load(Ordering::SeqCst) {
+                self.preview_entered.store(true, Ordering::SeqCst);
+                for _ in 0..5_000 {
+                    if cancel() {
+                        self.preview_cancelled.store(true, Ordering::SeqCst);
+                        return Err(AppError::Transcription("cancelled".into()));
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                return Err(AppError::Transcription("never cancelled".into()));
+            }
+            if let Some(text) = self.preview.lock().clone() {
+                return Ok(text);
+            }
+            self.transcribe(samples, request)
         }
         fn resolve_language(&self, _: &[f32], request: &SttRequest) -> String {
             self.detections.lock().pop_front().unwrap_or_else(|| request.language.clone())
@@ -1122,6 +1254,112 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(3)).await;
         assert_eq!(h.ui.partials.lock().len(), after_release, "preview stops when recording ends");
         assert_eq!(h.delivered(), vec!["Live words".to_string()]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_pass_of_the_live_preview_still_running_at_stop_is_cancelled() {
+        // While a blocking pass runs, the paused clock doesn't auto-advance, so this
+        // test steps the clock itself and polls in real time.
+        async fn until(what: &str, done: impl Fn() -> bool) {
+            for _ in 0..1_000 {
+                if done() {
+                    return;
+                }
+                tokio::task::yield_now().await;
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            panic!("timed out waiting for {what}");
+        }
+        let h = harness("hello there", None);
+        h.settings.save(Settings { live_preview: true, ..Settings::default() }).unwrap();
+        h.stt.hang_preview.store(true, Ordering::SeqCst);
+        h.press();
+        tokio::time::sleep(Duration::from_millis(999)).await;
+        tokio::time::advance(Duration::from_millis(5)).await; // the first preview pass starts and gets stuck in the engine
+        until("the preview pass to start", || h.stt.preview_entered.load(Ordering::SeqCst)).await;
+        assert!(h.delivered().is_empty());
+
+        h.release();
+        until("the stuck preview pass to be cancelled", || h.stt.preview_cancelled.load(Ordering::SeqCst)).await;
+        settle().await;
+        assert_eq!(h.delivered(), vec!["Hello there".to_string()], "the final text no longer waits for the preview");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_long_dictation_is_transcribed_in_pieces_and_cleaned_as_one_text() {
+        let h = harness("unused", None);
+        *h.recorder.chunks.lock() = 2;
+        *h.stt.queue.lock() = [
+            Ok("Send the report to Anna.".to_string()),
+            Ok("Um, call Ben about lunch.".to_string()),
+            Ok("Scratch that. Thanks a lot.".to_string()),
+        ]
+        .into();
+        h.press();
+        tokio::time::sleep(Duration::from_millis(3_500)).await;
+        assert_eq!(h.stt.languages.lock().len(), 2, "two chunks were transcribed while recording");
+        assert!(h.delivered().is_empty(), "nothing is pasted before the recording ends");
+        h.release();
+        settle().await;
+        assert_eq!(h.stt.languages.lock().len(), 3, "and only the last piece after stop");
+        // "Scratch that" at the start of the last piece takes back the sentence before it, across the cut.
+        assert_eq!(h.delivered(), vec!["Send the report to Anna. Thanks a lot.".to_string()]);
+        let saved = &h.store.history("", 10).unwrap()[0];
+        assert_eq!(saved.raw, "Send the report to Anna. Um, call Ben about lunch. Scratch that. Thanks a lot.");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_long_dictation_keeps_the_language_of_its_first_chunk() {
+        let h = harness("the constitution gives the agong his powers", None);
+        h.settings.save(Settings { languages: vec!["en".into(), "ml".into()], ..Settings::default() }).unwrap();
+        *h.stt.detections.lock() = ["en", "ml", "ml"].map(String::from).into();
+        *h.recorder.chunks.lock() = 1;
+        h.press();
+        tokio::time::sleep(Duration::from_millis(2_500)).await;
+        h.release();
+        settle().await;
+        assert_eq!(*h.stt.languages.lock(), vec!["en", "en"], "the last piece reuses the chunk's language");
+        assert_eq!(h.stt.detections.lock().len(), 2, "detected once");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failing_last_piece_still_delivers_what_was_already_heard() {
+        let h = harness("unused", None);
+        *h.recorder.chunks.lock() = 1;
+        *h.stt.queue.lock() = [Ok("Meet me at noon.".to_string()), Err(AppError::Transcription("boom".into()))].into();
+        h.press();
+        tokio::time::sleep(Duration::from_millis(2_500)).await;
+        h.release();
+        settle().await;
+        assert_eq!(h.delivered(), vec!["Meet me at noon.".to_string()]);
+        assert_eq!(h.phases().last(), Some(&Phase::Done));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failing_only_piece_is_reported() {
+        let h = harness("unused", None);
+        *h.stt.queue.lock() = [Err(AppError::Transcription("boom".into()))].into();
+        h.press();
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        h.release();
+        settle().await;
+        assert!(h.delivered().is_empty());
+        assert_eq!(h.phases().last(), Some(&Phase::Error));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_preview_shows_finished_chunks_before_the_live_words() {
+        let h = harness("unused", None);
+        h.settings.save(Settings { live_preview: true, ..Settings::default() }).unwrap();
+        *h.recorder.chunks.lock() = 1;
+        *h.stt.queue.lock() = [Ok("first part".to_string())].into();
+        *h.stt.preview.lock() = Some("second part".to_string());
+        h.press();
+        tokio::time::sleep(Duration::from_millis(3_500)).await;
+        let partials = h.ui.partials.lock().clone();
+        assert_eq!(partials.last().map(String::as_str), Some("First part second part"), "{partials:?}");
+        h.release();
+        settle().await;
     }
 
     #[tokio::test(start_paused = true)]

@@ -6,7 +6,12 @@ mod whisper;
 #[cfg(feature = "local-stt")]
 pub use whisper::WhisperEngine;
 
+use std::sync::Arc;
+
 use crate::error::AppResult;
+
+/// Asked repeatedly during a transcription; returning true stops it.
+pub type CancelFn = Arc<dyn Fn() -> bool + Send + Sync>;
 
 #[derive(Debug, Clone, Default)]
 pub struct SttRequest {
@@ -28,6 +33,12 @@ pub struct SttRequest {
 /// Speech-to-text. Synchronous: callers run it on a blocking thread.
 pub trait Transcriber: Send + Sync {
     fn transcribe(&self, samples: &[f32], request: &SttRequest) -> AppResult<String>;
+    /// Like [`transcribe`](Self::transcribe), but stops early (with an error) once
+    /// `cancel` returns true, so a pass nobody needs any more can't hold the engine.
+    /// Engines that can't be interrupted just run to the end.
+    fn transcribe_cancellable(&self, samples: &[f32], request: &SttRequest, _cancel: &CancelFn) -> AppResult<String> {
+        self.transcribe(samples, request)
+    }
     /// The language this audio would be transcribed in: `request.language`
     /// unless that's "auto", then a detected code (or "auto" if detection
     /// isn't possible). Lets a voice note keep one language throughout.
